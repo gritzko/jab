@@ -29,9 +29,10 @@ The `Buf` class and the public API are a raw-string-literal JS bundle (no js2c/n
 
 ###  cont.cpp — container framework over abc logs
 
-Per-(family,lane) JS prototypes bound once to native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`). Families: HEAP/HASH lanes, HUNK, ULOG, PACK. Each native leaf is pure marshalling — resolve a typed array to a `u8s` and call one abc/dog function; no format logic in the binding.
+Per-(family,lane) JS prototypes bound once to native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`). Families: HEAP/HASH lanes, HUNK, ULOG, PACK, WEAVE. Each native leaf is pure marshalling — resolve a typed array to a `u8s` and call one abc/dog function; no format logic in the binding.
 
  -  `pack.hpp` — PACK binding (GIT-007), pure marshalling over the dog/git pack core: `_feed`→`PACKu8sFeedObj` (raw|OFS_DELTA decided there), `_resolve`→`PACKResolveOfs`, `_next`→`PACKRecordEnd`; sha→offset index + base resolution stay in JS.
+ -  `weave.hpp` — WEAVE binding over dog/WEAVE: a WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call. `fold`→`WEAVENext`, `merge`→`WEAVEMerge` rewrite the whole blob; `alive`/`produce`→`WEAVEAlive`/`WEAVEProduce`, `scope`→`WEAVEScope`, the `rewind`/`next` cursor→`WEAVEStep`. `emitDiff`/`emitFull`→`WEAVEEmitDiff`/`WEAVEEmitFull` append diff `'H'` records (toks carry the per-token side) into a HUNK container read by the HUNK cursor — the C callback IS the sink (rule #4, no JS closure); `merged`→`WEAVEEmitMerged` renders an N-side merge into a Buf, framing conflicts `<<<< |||| >>>>`. Commit ids cross as 16-char hex hashlet strings (hi64 of the commit sha1); all u64↔hex lives in the leaf.
 
 ###  pol.cpp — `pol` event loop over abc/POL (one trampoline, JS owns the table)
 
@@ -62,4 +63,5 @@ Node-style async API on top of `pol`: native socket leaves return bare fds (EAGA
  -  ctest `JABCpol` — `test/pol.js`: periodic/one-shot timers, fd readiness (regular-file POLLIN, read-to-EOF drop), `pol.default`, handler-throw propagation, `pol.stop`.
  -  ctest `JABCnet` — `test/net.js`: TCP echo round-trip, a 200 KB multi-chunk transfer, UDP ping/pong, and setTimeout/clearTimeout/setInterval — all in the one implicit loop.
  -  ctest `JABCpack` — `test/pack.js`: offset-addressed pack write/seek/walk + the GIT-007 cross-impl vector (a JABC-written log resolves byte-identically through the dog/git multi-hop OFS_DELTA chase).
+ -  ctest `JABCweave` — `test/weave.js`: from-blob round-trip (alive == blob), diff fold with scope-classified produce per rev, fork/merge of disjoint edits, the rewind/next token cursor, emitDiff/emitFull into a HUNK container, merged conflict/disjoint framing, and weaveIdHash — mirrors dog/test/WEAVE01.c + WEAVE02.c.
  -  `lsan.supp` — suppresses JSC-internal singleton leaks by library name.
