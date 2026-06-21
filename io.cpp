@@ -562,6 +562,37 @@ static JABC_FN(JABCioUnlink) {
   JABC_UNDEF;
 }
 
+//  io.rename(old, new) -> atomic rename within a filesystem (over FILERename).
+//  Pure marshalling.  The LSM flush path (JS-022) books a run under a temp name,
+//  closes it, then renames it into the final run file so readers never see a
+//  half-written run.
+static JABC_FN(JABCioRename) {
+  if (argc < 2) JABC_THROW("io.rename(old, new)");
+  a_pad(u8, oldp, FILE_PATH_MAX_LEN);
+  a_pad(u8, newp, FILE_PATH_MAX_LEN);
+  if (JABCPath(oldp, ctx, args[0], exception) != OK ||
+      JABCPath(newp, ctx, args[1], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.rename(): bad path");
+  }
+  if (FILERename($path(oldp), $path(newp)) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
+//  io.mkdir(path) -> create a directory (and parents) over FILEMakeDirP.  Pure
+//  marshalling; idempotent (an existing dir is fine).  The index (JS-022) calls
+//  it to materialise its run directory before booking the first run.
+static JABC_FN(JABCioMkdir) {
+  if (argc < 1) JABC_THROW("io.mkdir(path)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.mkdir(): bad path");
+  }
+  if (FILEMakeDirP($path(path)) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
 //  . . . . . . . . process spawn + reap (JS-020) . . . . . . . .
 //
 //  argv is a JS string[] -> a u8css (slice of u8cs) over per-call STACK
@@ -744,6 +775,8 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "_msync", JABCioMsync);
   JABC_API_FN(io, "_truncate", JABCioTruncate);
   JABC_API_FN(io, "unlink", JABCioUnlink);
+  JABC_API_FN(io, "rename", JABCioRename);
+  JABC_API_FN(io, "mkdir", JABCioMkdir);
   JABC_API_FN(io, "spawn", JABCioSpawn);
   JABC_API_FN(io, "spawnFds", JABCioSpawnFds);
   JABC_API_FN(io, "reap", JABCioReap);

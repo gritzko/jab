@@ -5,6 +5,7 @@ extern "C" {
 #include "hash.hpp"
 #include "heap.hpp"
 #include "hit.hpp"
+#include "index.hpp"
 #include "hunk.hpp"
 #include "pack.hpp"
 #include "ulog.hpp"
@@ -421,6 +422,337 @@ static const char* JABC_CONT_JS = R"JS(
 
   //  WEAVE token identity/anchor hash: hashlet(RAPHash(commit-id ++ ordinal)).
   abc.weaveIdHash = (hash, ord) => abc._weave_idhash(hash, ord | 0);
+
+  //  abc.index(lane, {dir, ext, mem}) — a mmap LSM index (JS-022): a stack of
+  //  immutable, oldest-first sorted runs (.runs) + a memtable.  The write path
+  //  is PURE JS over the existing leaves (HEAP sort + abc.merge/book/close);
+  //  the read path (get / range / prefix) and compact() ride the 3 native
+  //  index leaves (_findge_ / _seekrange_ / _compact_).  Queries STREAM hits
+  //  through an in-frame cb (rule #4); cb's return is a stop signal.
+  //
+  //  Two run backings, chosen by opts.dir (JS-side branch — the leaves are
+  //  backing-agnostic, taking typed-array views):
+  //    * ON-DISK (opts.dir PRESENT): runs are abc.book files in <dir>; flush
+  //      books + msync-trims + io.rename + re-opens RO; compact lands the merged
+  //      run on disk; an existing dir is re-opened (its run files loaded).
+  //    * IN-MEMORY (opts.dir ABSENT): runs live in anonymous io.ram mappings —
+  //      no files, no rename/re-open; flush merges the sorted memtable into a
+  //      fresh RAM run, compact merges RAM->RAM.  Starts empty, gone at exit.
+  //
+  //  v1 deletes: the newest run shadows older at QUERY time (no tombstone
+  //  drop).  Compaction's full-element dedup + 1/8 ladder collapses identical
+  //  rows only — same-key/diff-val rows coexist (keyed compaction is deferred).
+  //  .range/.prefix keep the native _seekrange_ fast-drain (NO cross-run dedup;
+  //  collapse happens at compaction).  .seek(needle) is a PURE-JS pull cursor:
+  //  a k-way min-heap over each source's head (runs seeked via _findge_, plus
+  //  the snapshotted memtable) with full-element newest-wins dedup, advancing
+  //  ONE merged entry per .next() — ALL cursor state in JS (rule #4).
+  //  Lanes: u64 (scalar) and wh128 ((key,val), point on key).
+  const IDX = {
+    u64:   { fam: "HEAPu64",   w: 1, pair: false },
+    wh128: { fam: "HEAPwh128", w: 2, pair: true  },
+  };
+  abc.index = (lane, opts) => {
+    const M = IDX[lane];
+    if (!M) throw "abc.index: unsupported lane " + lane + " (u64 | wh128)";
+    opts = opts || {};
+    const dir = opts.dir;
+    const onDisk = (dir != null);              // present => persisted file runs
+    const ext = opts.ext || ("." + lane);
+    const memSlots = (opts.mem | 0) || 4096;
+    if (onDisk) io.mkdir(dir);
+
+    const findge = abc["_findge_" + lane];
+    const seekrange = abc["_seekrange_" + lane];
+    const compact = abc["_compact_" + lane];
+
+    const idx = {
+      lane, dir, ext, w: M.w,
+      onDisk,                      // backing: true=file runs, false=io.ram runs
+      runs: [],                    // oldest-first; each a HEAPlane container
+      mem: abc.ram(M.fam, memSlots),
+      _seq: 0,
+    };
+
+    //  validate alignment on opening a run RO: byteLength % (w*BPE) === 0.
+    const openRun = (path) => {
+      const r = abc.mmap(M.fam, path, "r");
+      const slot = M.w * r.BYTES_PER_ELEMENT;
+      if ((r.byteLength % slot) !== 0)
+        throw "abc.index: misaligned run " + path + " (" + r.byteLength + " % " + slot + ")";
+      r.buffer.watermark = (r.byteLength / slot) | 0;   // live = whole file
+      r._path = path;                                   // for unlink on compact
+      return r;
+    };
+
+    //  load any pre-existing run files in the dir (sorted by name == seqno).
+    //  IN-MEMORY indexes start empty each open (nothing to load).
+    if (onDisk) {
+      const sfx = ext;
+      const files = io.readdir(dir).filter((f) => f.endsWith(sfx)).sort();
+      for (const f of files) {
+        idx.runs.push(openRun(dir + "/" + f));
+        const n = parseInt(f, 10);
+        if (n >= idx._seq) idx._seq = n + 1;
+      }
+    }
+
+    const runPath = (seq) =>
+      dir + "/" + String(seq).padStart(8, "0") + ext;
+
+    //  put: append into the memtable (u64: one BigInt; wh128: key,val).
+    idx.put = M.pair
+      ? function (k, v) { this.mem.push(BigInt(k), BigInt(v)); return this; }
+      : function (v)    { this.mem.push(BigInt(v));           return this; };
+
+    //  flush: memtable.sort() -> abc.merge([mem]) into a fresh sorted+deduped
+    //  run -> push.  ON-DISK: book a temp file, merge into it, close (msync +
+    //  ftruncate), rename into the final run file, re-open RO.  IN-MEMORY: merge
+    //  into an io.ram destination sized to mem.size; merge sets its watermark to
+    //  the live count (no file, no close/rename/re-open).
+    idx.flush = function () {
+      if (this.mem.size === 0) return this;
+      this.mem.sort();
+      if (this.onDisk) {
+        const seq = this._seq++;
+        const tmp = this.dir + "/." + String(seq).padStart(8, "0") + this.ext + ".tmp";
+        const out = abc.book(M.fam, tmp, this.mem.size);   // upper bound = mem size
+        abc.merge([this.mem], out);                        // sorted+deduped run
+        abc.close(out);                                    // msync + ftruncate
+        const path = runPath(seq);
+        io.rename(tmp, path);
+        this.runs.push(openRun(path));
+      } else {
+        const out = abc.ram(M.fam, this.mem.size);         // upper bound = mem size
+        abc.merge([this.mem], out);                        // sets out.watermark
+        this._seq++;
+        this.runs.push(out);                               // RAM run; GC munmaps
+      }
+      this.mem.buffer.watermark = 0;                       // empty the memtable
+      return this;
+    };
+
+    //  compact: run the 1/8 ladder over .runs via _compact_<lane>.  The native
+    //  leaf merges the youngest m runs into the destination; replace
+    //  runs[len-m..] with that one run.  Cascades until IsCompact holds.
+    //  ON-DISK: destination is a booked temp file, trimmed + renamed into place,
+    //  the m sources unlinked + unpinned.  IN-MEMORY: destination is an io.ram
+    //  mapping sized to sum(runs); the m source mappings are unpinned (GC
+    //  munmaps).  The native leaf is backing-agnostic (typed-array views only).
+    idx.compact = function () {
+      while (this.runs.length >= 2) {
+        const slices = this.runs.map((r) => r.subarray(0, (r.buffer.watermark | 0) * M.w));
+        let total = 0;
+        for (const s of slices) total += s.length / M.w;
+        const seq = this._seq++;
+        if (this.onDisk) {
+          //  book the destination run, compact the youngest runs straight into
+          //  its mapping, then trim + rename it into place.
+          const tmp = this.dir + "/." + String(seq).padStart(8, "0") + this.ext + ".tmp";
+          const book = abc.book(M.fam, tmp, total || 1);
+          const [merged, m] = compact(slices, book);
+          if (m < 2) { abc.close(book); io.unlink(tmp); this._seq--; break; }
+          book.buffer.watermark = merged | 0;              // live = merged elems
+          abc.close(book);                                 // msync + trim
+          const path = runPath(seq);
+          io.rename(tmp, path);
+          for (let i = 0; i < m; i++) {                    // drop the m sources
+            const old = this.runs.pop();
+            if (old._path) io.unlink(old._path);
+            old.buffer._map = null;                        // unpin (GC munmaps)
+          }
+          this.runs.push(openRun(path));
+        } else {
+          //  merge the youngest runs into a fresh RAM mapping (sum upper bound).
+          const out = abc.ram(M.fam, total || 1);
+          const [merged, m] = compact(slices, out);
+          if (m < 2) { out.buffer._map = null; this._seq--; break; }
+          out.buffer.watermark = merged | 0;               // live = merged elems
+          for (let i = 0; i < m; i++) {                    // drop the m sources
+            const old = this.runs.pop();
+            old.buffer._map = null;                        // unpin (GC munmaps)
+          }
+          this.runs.push(out);
+        }
+      }
+      return this;
+    };
+
+    //  snapshot the (live) query sources, newest-first: the sorted memtable
+    //  slice (if non-empty) followed by the runs newest->oldest.  Sorting the
+    //  memtable in place is idempotent for an already-sorted run.
+    const querySources = () => {
+      const src = [];
+      if (idx.mem.size > 0) {
+        idx.mem.sort();
+        src.push(idx.mem.subarray(0, (idx.mem.buffer.watermark | 0) * M.w));
+      }
+      for (let i = idx.runs.length - 1; i >= 0; i--) {
+        const r = idx.runs[i];
+        src.push(r.subarray(0, (r.buffer.watermark | 0) * M.w));
+      }
+      return src;                                          // newest-first
+    };
+
+    //  point get: scan sources newest-first; FindGE the key-low needle, read
+    //  the element, accept iff its key matches (keeper KEEPLookup pattern).
+    //  Returns the value (u64: the scalar; wh128: the val for that key) or
+    //  undefined.  Newest source wins (shadowing).
+    idx.get = M.pair
+      ? function (key) {
+          key = BigInt(key);
+          for (const s of querySources()) {
+            const i = findge(s, key, 0n);                  // needle (key, 0)
+            if (i * M.w < s.length && s[i * M.w] === key) return s[i * M.w + 1];
+          }
+          return undefined;
+        }
+      : function (v) {
+          v = BigInt(v);
+          for (const s of querySources()) {
+            const i = findge(s, v);
+            if (i < s.length && s[i] === v) return v;
+          }
+          return undefined;
+        };
+
+    //  range [lo, hi): SeekRange the heap of all sources to [lo,hi), drain it
+    //  through cb.  u64: lo/hi scalars, cb(value).  wh128: lo/hi are KEYS, the
+    //  range is [(lo,0), (hi,0)) over (key,val), cb([key,val]).
+    idx.range = M.pair
+      ? function (lo, hi, cb) {
+          seekrange(querySources(), BigInt(lo), 0n, BigInt(hi), 0n, cb);
+        }
+      : function (lo, hi, cb) {
+          seekrange(querySources(), BigInt(lo), BigInt(hi), cb);
+        };
+
+    //  prefix(p, lowBits, cb): range [p, p + 2^lowBits) — the keeper/spot
+    //  fixed-prefix block (spot capo_seek_prefix: [prefix, prefix + 1<<24)).
+    idx.prefix = function (p, lowBits, cb) {
+      const lo = BigInt(p);
+      const hi = lo + (1n << BigInt(lowBits | 0));
+      return this.range(lo, hi, cb);
+    };
+
+    //  --- the seek cursor: a PURE-JS pull-based k-way merge (rule #4). ---
+    //  Compare TWO heads (each a [s, i] = source view + element index) in lane
+    //  sort order: u64 by the scalar, wh128 lexicographically by (key, val) —
+    //  the exact ordering of <lane>sFindGE / the run typed-array views.  Used to
+    //  order the min-heap AND to detect duplicates (a == b iff !lt(a,b)&&!lt(b,a)).
+    const headLT = M.pair
+      ? (sa, ia, sb, ib) => {
+          const ka = sa[ia * 2], kb = sb[ib * 2];
+          if (ka !== kb) return ka < kb;
+          return sa[ia * 2 + 1] < sb[ib * 2 + 1];
+        }
+      : (sa, ia, sb, ib) => sa[ia] < sb[ib];
+
+    //  seek(needle): position every source (each sorted run via _findge_, plus
+    //  the snapshotted memtable) at the first element >= needle, then pull ONE
+    //  merged entry per .next() in ascending order.  Sources carry their JS
+    //  position; a tiny binary min-heap (indices into `srcs`) orders the current
+    //  heads; full-element newest-wins dedup (sources are newest-first, so the
+    //  first head equal to the just-emitted element wins and the rest are
+    //  skipped).  ALL state is JS-owned (no held native cursor) — the only
+    //  native call is the per-source _findge_ binary search at seek time.
+    //
+    //  Memtable consistency: querySources() sorts the memtable in place and
+    //  snapshots its live slice as the NEWEST source, so a pending put is
+    //  visible to the cursor exactly as it is to get/range — no auto-flush, no
+    //  fork (the snapshot is a subarray view; further puts after seek are not
+    //  reflected, matching the "snapshot on seek" contract).
+    idx.seek = function (...needle) {
+      const M_ = M;
+      const sources = querySources();                // newest-first slices
+      //  srcs[k] = { s: view, i: cursor index, n: element count }.  Position
+      //  each at the first element >= needle via the native binary search.
+      const srcs = [];
+      for (const s of sources) {
+        const n = (s.length / M_.w) | 0;
+        const i = M_.pair ? findge(s, needle[0], needle[1] || 0n)
+                          : findge(s, needle[0]);
+        if (i < n) srcs.push({ s, i, n });
+      }
+      //  binary min-heap of indices into srcs, ordered by head element; ties
+      //  break by source order (newest first) so dedup keeps the newest.
+      const heap = [];                               // holds k = index in srcs
+      const lt = (a, b) => {
+        const A = srcs[a], B = srcs[b];
+        if (headLT(A.s, A.i, B.s, B.i)) return true;
+        if (headLT(B.s, B.i, A.s, A.i)) return false;
+        return a < b;                                // equal heads: newer wins
+      };
+      const up = (c) => {
+        while (c > 0) {
+          const p = (c - 1) >> 1;
+          if (!lt(heap[c], heap[p])) break;
+          const t = heap[c]; heap[c] = heap[p]; heap[p] = t; c = p;
+        }
+      };
+      const down = (p) => {
+        const L = heap.length;
+        for (;;) {
+          let m = p, l = 2 * p + 1, r = l + 1;
+          if (l < L && lt(heap[l], heap[m])) m = l;
+          if (r < L && lt(heap[r], heap[m])) m = r;
+          if (m === p) break;
+          const t = heap[p]; heap[p] = heap[m]; heap[m] = t; p = m;
+        }
+      };
+      const push = (k) => { heap.push(k); up(heap.length - 1); };
+      for (let k = 0; k < srcs.length; k++) push(k);
+
+      //  advance source k by one; re-heapify (or drop it if exhausted).
+      const advance = (k) => {
+        srcs[k].i++;
+        if (srcs[k].i < srcs[k].n) { heap[0] = k; down(0); }
+        else {                                       // exhausted: pop the root
+          const last = heap.pop();
+          if (heap.length) { heap[0] = last; down(0); }
+        }
+      };
+
+      const cur = M_.pair ? { key: undefined, val: undefined, entry: undefined }
+                          : { key: undefined, val: undefined, entry: undefined };
+      const cursor = {
+        get key()   { return cur.key; },
+        get val()   { return cur.val; },
+        get entry() { return cur.entry; },
+        //  pull one merged entry; collapse all sources whose head equals it
+        //  (newest-wins is automatic — they are identical full elements).
+        //  Returns false past the last entry (cur fields go undefined).
+        next() {
+          if (heap.length === 0) {
+            cur.key = cur.val = cur.entry = undefined;
+            return false;
+          }
+          const k = heap[0], src = srcs[k];
+          if (M_.pair) {
+            const key = src.s[src.i * 2], val = src.s[src.i * 2 + 1];
+            cur.key = key; cur.val = val; cur.entry = [key, val];
+          } else {
+            const v = src.s[src.i];
+            cur.key = v; cur.val = v; cur.entry = v;
+          }
+          //  drop this element from every source that holds it (dup collapse).
+          advance(k);
+          while (heap.length) {
+            const j = heap[0], t = srcs[j];
+            const eq = M_.pair
+              ? (t.s[t.i * 2] === cur.key && t.s[t.i * 2 + 1] === cur.val)
+              : (t.s[t.i] === cur.key);
+            if (!eq) break;
+            advance(j);
+          }
+          return true;
+        },
+      };
+      return cursor;
+    };
+
+    return idx;
+  };
 })(this);
 )JS";
 
@@ -429,6 +761,7 @@ ok64 JABCContInstall() {
   JABCHeapInstall(abc);
   JABCHashInstall(abc);
   JABCHitInstall(abc);
+  JABCIndexInstall(abc);
   JABCHunkInstall(abc);
   JABCPackInstall(abc);
   JABCUlogInstall(abc);

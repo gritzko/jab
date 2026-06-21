@@ -141,6 +141,8 @@ let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepS
 let h = io.readdir("dir", {hidden:true});       // → incl. dotfiles ('.x')
 io.readdir("dir", {recursive:true, callback:n=>{}}); // cb across the subtree
 io.unlink("tmp");                 // remove a name                  (FILEUnLink)
+io.rename("a.tmp", "a");          // atomic rename within a FS       (FILERename)
+io.mkdir("a/b/c");                // create dir + parents (idempotent)(FILEMakeDirP)
 let dir = io.cwd();               // process working directory      (FILEGetCwd)
 let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
@@ -251,6 +253,58 @@ to the wall clock like `RONNow` (localtime), and only span **2000-2099** —
 `ron.of` of an out-of-range instant throws. `ron.date` renders the same
 relative form `be log`/`be status` use (`DOGutf8sFeedDate`), centre-padded to
 7 columns; `ron.date(0n)` is the `"?"` placeholder.
+##  abc.index — mmap LSM index (point / range / prefix / seek)
+
+A `abc.index(lane, {dir, ext, mem})` is a stack of immutable sorted runs
+(`.runs`, oldest-first) plus a memtable. The write path is pure JS over the
+existing leaves (sort + `abc.merge`/`book`/`close` + `io.rename`); the read path
+and `compact` ride 3 native leaves (`<lane>sFindGE`, `HIT<lane>SeekRange`,
+`HIT<lane>Compact`), all backing-agnostic (typed-array views).
+
+```js
+let ix = abc.index("u64", {dir:"idx", ext:".u64", mem:4096});  // or "wh128"
+ix.put(v);                 // u64: one BigInt;  wh128: ix.put(key, val)
+ix.flush();                // memtable.sort()→merge into a fresh run
+ix.compact();              // 1/8 size-tiered ladder over .runs (full-elem dedup)
+ix.get(needle);            // POINT: u64 scalar / wh128 KEY → value | undefined
+ix.range(lo, hi, v => …);  // [lo,hi): u64 cb(v); wh128 keys, cb([key,val])
+ix.prefix(p, lowBits, cb); // == range [p, p + 2^lowBits)  (spot/keeper block)
+let c = ix.seek(needle);   // PULL cursor: u64 seek(v); wh128 seek(key[, val])
+while (c.next()) use(c.key, c.val, c.entry);   // ascending from needle; stop anytime
+```
+
+**Two run backings, chosen by `opts.dir`:**
+- **on-disk** (`dir` PRESENT) — runs are `abc.book` files in `<dir>`; `flush`
+  books + msync-trims + `io.rename` + re-opens RO; `compact` lands the merged run
+  on disk; re-opening an existing dir loads its run files. Persistent.
+- **in-memory** (`dir` ABSENT) — runs live in anonymous `io.ram` mappings: NO
+  files, no rename/re-open, GC munmaps them. Starts empty each open, gone at exit.
+  `ix.onDisk` is `false`; `ix.dir` is `undefined`.
+
+`.range`/`.prefix` STREAM hits through an in-frame callback (rule #4) — the cb
+return is a stop signal (`false`/`"enough"` stop, truthy/`undefined` go on),
+exactly the `io.readdir(path, cb)` contract — via the native `_seekrange_`
+fast-drain (so it does NOT dedup across runs; collapse is a compaction concern).
+
+`.seek(needle)` is a **PURE-JS PULL cursor** (rule #4 — ALL state in JS, no held
+native cursor; only the per-source `_findge_` binary search crosses). It seeks
+every source (each run + a snapshot of the current memtable) to the first entry
+`>= needle`, then `.next()` advances ONE merged entry at a time in ascending
+order (binary min-heap over the heads + **full-element newest-wins dedup**, the
+same collapse as compaction/`.range`), exposing `.key`/`.val`/`.entry` (u64:
+all three are the scalar; wh128: the key, the val, and the `[key,val]` pair).
+`.next()` returns `false` past the last entry. The caller pulls as many as it
+wants and stops anytime. The memtable is snapshotted on `seek` (its live puts are
+visible exactly as to `get`/`range`; later puts are not reflected — no fork).
+
+Lanes: **u64** (spot trigram, scalar) and **wh128** (keeper puppy registry,
+`(key,val)`, point on KEY). u64 needles/`lo`/`hi` are BigInt; wh128 keys cross as
+BigInt. `kv64` is deferred (its `Z` is key-only ⇒ compaction dedup is not
+full-element). **v1 deletes**: a newer run shadows an older one AT QUERY time
+(`get` scans runs newest-first; no tombstone drop). Compaction collapses
+identical rows only, so a key with two different vals across runs keeps both
+(keyed compaction is deferred) — keep one stable val per key. On open each run
+is alignment-checked (`byteLength % (w·BPE) === 0`).
 
 ##  tok — generic source tokenizer
 
@@ -338,6 +392,9 @@ k.msync();
 | `io.spawn` / `spawnFds`   | `FILESpawn` / `FILESpawnFds`           |
 | `io.reap`                 | `FILEReap` (`{code}` / `{signal}`)     |
 | `io.unlink`               | `FILEUnLink`                           |
+| `io.rename` / `io.mkdir`  | `FILERename` / `FILEMakeDirP`          |
+| `abc.index` get/range     | `<lane>sFindGE` / `HIT<lane>SeekRange` |
+| `abc.index` compact       | `HIT<lane>Compact` (1/8 ladder)        |
 | `io.book`                 | `FILEBookCreate`                       |
 | `b.msync` / `trim`        | `FILEMSync` / `FILETrimMap`            |
 | `io.ram`                  | `u8bMap` (anonymous)                   |
