@@ -137,6 +137,8 @@ io.lock(fd, true); io.unlock(fd); // flock LOCK_EX / LOCK_UN        (FILELock)
 let st = io.stat("data");         // {size, mtime, mode, kind}     (FILEStat)
 let {pid, stdin, stdout} = io.spawn("/bin/cat", ["cat"]); // fds    (FILESpawn)
 let n = io.reap(pid);             // wait, → exit code              (FILEReap)
+let dir = io.cwd();               // process working directory      (FILEGetCwd)
+let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
 
 ##  feed/drain over fds

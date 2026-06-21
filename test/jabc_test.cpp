@@ -128,6 +128,10 @@ int main() {
     fprintf(stderr, "ABC_BASS u8bMap failed\n");
     return 1;
   }
+  //  JS-017 env fixture: set a known var BEFORE building the context so
+  //  io.getenv() (getenv(3) under the hood) sees it.
+  setenv("JABC017_VAR", "hello-017", 1);
+  unsetenv("JABC017_UNSET");
   JABC_CONTEXT = JSGlobalContextCreate(NULL);
   JABC_GLOBAL_OBJECT = JSContextGetGlobalObject(JABC_CONTEXT);
   JABCutf8Install();
@@ -162,6 +166,18 @@ int main() {
           "let m=io.mmap(MMAP_PATH,'r');"
           "return m.size===7&&utf8.Decode(m.data())==='mapped!'})()");
     unlink(path);
+  }
+
+  //  JS-017: io.getenv(name) -> string|undefined ; io.cwd() -> string.
+  //  A set var reads back; an unset var is undefined; cwd matches getcwd().
+  check("getenv_set", "io.getenv('JABC017_VAR')==='hello-017'");
+  check("getenv_unset", "io.getenv('JABC017_UNSET')===undefined");
+  {
+    char cwd[PAGESIZE];
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+      setGlobalStr("CWD", cwd);
+      check("cwd_matches", "io.cwd()===CWD");
+    }
   }
 
   //  Release the context FIRST: GC runs the no-copy deallocators

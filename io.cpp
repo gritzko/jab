@@ -288,6 +288,45 @@ static JABC_FN(JABCioTruncate) {
   JABC_UNDEF;
 }
 
+//  A JS string from a u8 slice (NUL-terminated copy; env / cwd is ASCII-ish
+//  text, small enough for a stack page).  Mirrors uri.cpp's JABCSliceStr.
+static JSValueRef JABCSliceStr(JSContextRef ctx, u8cs s) {
+  char tmp[PAGESIZE];
+  size_t n = (size_t)$len(s);
+  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
+  if (n) memcpy(tmp, s[0], n);
+  tmp[n] = 0;
+  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
+  JSValueRef v = JSValueMakeString(ctx, js);
+  JSStringRelease(js);
+  return v;
+}
+
+//  io.cwd() -> string  (the process working directory, via getcwd(3)).
+static JABC_FN(JABCioCwd) {
+  (void)args;
+  (void)argc;
+  a_path(cwd);
+  if (FILEGetCwd(cwd) != OK) JABC_THROW(strerror(errno));
+  return JABCSliceStr(ctx, u8bDataC(cwd));
+}
+
+//  io.getenv(name) -> string | undefined.  FILEGetEnv yields an empty slice
+//  for an unset (or empty-valued) var; either way we return `undefined`.
+static JABC_FN(JABCioGetenv) {
+  if (argc < 1 || !JSValueIsString(ctx, args[0]))
+    JABC_THROW("io.getenv(name) -> string|undefined");
+  char name[PAGESIZE];
+  JSStringRef s = JSValueToStringCopy(ctx, args[0], exception);
+  if (*exception || s == NULL) return JSValueMakeUndefined(ctx);
+  JSStringGetUTF8CString(s, name, sizeof(name));
+  JSStringRelease(s);
+  u8cs val = {};
+  FILEGetEnv(name, val);
+  if (u8csEmpty(val)) return JSValueMakeUndefined(ctx);
+  return JABCSliceStr(ctx, val);
+}
+
 //  io.isatty(fd) -> bool  (is the fd a terminal? — the color-vs-plain gate)
 static JABC_FN(JABCioIsatty) {
   if (argc < 1) JABC_THROW("io.isatty(fd)");
@@ -345,6 +384,8 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "_msync", JABCioMsync);
   JABC_API_FN(io, "_truncate", JABCioTruncate);
   JABC_API_FN(io, "isatty", JABCioIsatty);
+  JABC_API_FN(io, "cwd", JABCioCwd);
+  JABC_API_FN(io, "getenv", JABCioGetenv);
   JABC_API_FN(io, "log", JABCioLog);
   return OK;
 }

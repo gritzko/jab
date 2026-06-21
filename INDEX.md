@@ -21,6 +21,7 @@ JABC is a thin, anti-bloat JavaScriptCore binding: stock `libjavascriptcore`, th
  -  `io._mmap` — `FILEMapRO/RW/Create` → `Uint8Array` no-copy, `munmap` on GC (`JABCMapFree`).
  -  `io._ram` — anonymous `MAP_NORESERVE` mmap → `Uint8Array`, `munmap` on GC (`JABCRamFree`).
  -  `io._msync` — flush a mapped typed array's pages (raw `msync`, no descriptor lookup).
+ -  `io.cwd`/`io.getenv` — process cwd (`FILEGetCwd`) / env var (`FILEGetEnv`, `undefined` if unset); pure marshalling, no held ref.
  -  `io.log` — write strings / typed arrays to stderr.
 
 ###  buf.cpp — the `Buf` cursor class + constructors (embedded JS)
