@@ -89,6 +89,7 @@ static void JABCInstallModules() {
   JABCioInstall();
   JABCbufInstall();   //  Buf class + constructors layer over utf8/io leaves
   JABCContInstall();  //  abc.* containers (HEAP/HASH) layer over io mmap leaves
+  JABCTokInstall();   //  tok.parse + TokStream over dog/tok (JS-023)
   JABCUriInstall();   //  URI class over abc/URI
   JABCCodecInstall(); //  hex + sha1/sha256 + ron
   JABCAnsiInstall();  //  ansi colour helper (pure JS)

@@ -252,6 +252,32 @@ to the wall clock like `RONNow` (localtime), and only span **2000-2099** —
 relative form `be log`/`be status` use (`DOGutf8sFeedDate`), centre-padded to
 7 columns; `ron.date(0n)` is the `"?"` placeholder.
 
+##  tok — generic source tokenizer
+
+```js
+let t32 = tok.parse(srcBytes, "js");   // Uint8Array + ext -> Uint32Array of tok32
+let t  = tok.parse(srcBytes, "js", out); // into a Buf: zero-copy view, reuse out
+let s = new TokStream(t32, srcBytes);  // cursor; pins srcBytes (offsets = positions)
+s.tag; s.start; s.end; s.side; s.custom; // current token (tag is a 1-char string)
+s.text(src);   // zero-copy Uint8Array subarray over src  (defaults to the pinned src)
+s.str(src);    // utf8.Decode of text()
+s.next();      // advance; false past the last token       s.seek(i); s.length;
+```
+
+`tok.parse` drives the same `dog/tok` lexer as `HUNK.dogenize` (no parse logic
+in JS), returning the bare `tok32` array instead of a hunk. `lang` is an
+extension (a leading dot is fine); unknown/empty falls back to plain text. A
+source `> 0xFFFFFF` bytes (16 MiB, the 24-bit end-offset cap) throws; empty →
+empty array. Without `out`, a fresh (4-aligned) `Uint32Array` is returned. With
+`out` (a `Buf`), the packed `tok32` is written into `out`'s IDLE, `out.fed(n*4)`
+advances its cursor, and a **zero-copy** `Uint32Array` view over those bytes is
+returned — so one `Buf` can be reused across many parses (`reset()` between),
+the `delt.apply(…,out)` convention. The reused `Buf`'s IDLE head must be
+4-aligned (a fresh/reset `Buf` is) and large enough for `(srcLen+1)` tok32, else
+`tok.parse` throws. `TokStream` decodes by bit math — `tag = 'A' + (w>>>27)`,
+`custom = (w>>>26)&1`, `side = (w>>>24)&3`, `end = w & 0xFFFFFF`; a token's
+`start` is the previous token's `end`.
+
 ##  script args
 
 ```js
