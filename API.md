@@ -306,6 +306,38 @@ identical rows only, so a key with two different vals across runs keeps both
 (keyed compaction is deferred) — keep one stable val per key. On open each run
 is alignment-checked (`byteLength % (w·BPE) === 0`).
 
+##  git — pack-log package (`git.pack` / `git.delta`)
+
+The git/pack-log JS surface (JS-024). `git.pack` builds an OFFSET-ADDRESSED git
+pack log (a `u8` buffer: 12-byte header + `[obj-hdr][zlib]` records); `git.delta`
+is the delta op. Pure marshalling over the dog/git pack core — the native leaves
+(`PACKu8sFeedObj`/`PACKResolveOfs`/…, `DELTApply`) are UNCHANGED, just re-homed
+here (was `abc.over("PACK")` / `delt.apply`, now removed — hard cutover).
+
+```js
+let p = git.pack.ram(1 << 16);   // anon mmap; .over(ta) / .mmap(path,mode,slots) / .book(path,slots)
+p.header();                      // write the 12-byte header (count filled by finish)
+let a = p.feed("blob", v1);      // raw object -> byte offset a
+let b = p.feed("blob", v2, a);   // base @a -> the writer picks raw|OFS_DELTA
+p.finish();                      // backfill the object count
+
+p.seek(a);                       // address by OFFSET only (a sha throws)
+p.type; p.size; p.count;         // "blob" / size / object count
+p.baseOffset; p.ref;             // ofs-delta base offset / ref-delta sha (else undefined)
+p.inflate(out);   p.resolve(out); // one record's zlib bytes / the full delta-chase, into a Buf
+p.rewind(); while (p.next()) use(p.offset, p.type);  // sequential walk
+
+git.delta.apply(base, delta, out);  // reconstruct a delta target into a Buf, returns n
+```
+
+`git.pack.{ram,over,mmap,book}` mirror the abc-container constructors verbatim
+(`ram(slots)` anon mmap, `over(ta)` wrap, `mmap(path,mode,slots)` file,
+`book(path,slots)` sparse output); `abc.close` msyncs + unpins a booked pack
+(trim to the write head, no lane scaling). A PACK never takes a sha — sha→offset
+indexing is the index layer's job (`abc.index`). The GIT-007 cross-impl vector
+holds: a JABC-written log resolves byte-identically through the dog/git multi-hop
+OFS_DELTA chase (keeper + binding share one pack format).
+
 ##  tok — generic source tokenizer
 
 ```js
@@ -326,7 +358,7 @@ empty array. Without `out`, a fresh (4-aligned) `Uint32Array` is returned. With
 `out` (a `Buf`), the packed `tok32` is written into `out`'s IDLE, `out.fed(n*4)`
 advances its cursor, and a **zero-copy** `Uint32Array` view over those bytes is
 returned — so one `Buf` can be reused across many parses (`reset()` between),
-the `delt.apply(…,out)` convention. The reused `Buf`'s IDLE head must be
+the `git.delta.apply(…,out)` convention. The reused `Buf`'s IDLE head must be
 4-aligned (a fresh/reset `Buf` is) and large enough for `(srcLen+1)` tok32, else
 `tok.parse` throws. `TokStream` decodes by bit math — `tag = 'A' + (w>>>27)`,
 `custom = (w>>>26)&1`, `side = (w>>>24)&3`, `end = w & 0xFFFFFF`; a token's

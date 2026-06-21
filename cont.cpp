@@ -138,10 +138,11 @@ static const char* JABC_CONT_JS = R"JS(
     PROTO["HUNK"] = P;
   }
 
-  //  PACK: an offset-addressed git pack log (u8).  feed returns the object's
-  //  byte offset; seek/next address by offset only (a sha throws); delta
-  //  records are surfaced (baseOffset/ref), not resolved.
-  {
+  //  git.pack PROTO: an offset-addressed git pack log (u8).  feed returns the
+  //  object's byte offset; seek/next address by offset only (a sha throws);
+  //  delta records are surfaced (baseOffset/ref), not resolved.  JS-024: this
+  //  is NOT an abc family — the `git` package below owns its constructors.
+  const PACK_PROTO = (function () {
     const T2N = { commit: 1, tree: 2, blob: 3, tag: 4, "ofs-delta": 6, "ref-delta": 7 };
     const N2T = { 1: "commit", 2: "tree", 3: "blob", 4: "tag", 6: "ofs-delta", 7: "ref-delta" };
     const EMPTY8 = new Uint8Array(0);
@@ -210,8 +211,8 @@ static const char* JABC_CONT_JS = R"JS(
       out.fed(abc._pack_inflate(this, this._rec, out.idle(), 0));
       return out;
     };
-    PROTO["PACK"] = P;
-  }
+    return P;
+  })();
 
   //  ULOG: append-only (ts,verb,uri) text log, no index.  feed moves the
   //  watermark; seek* are pure offset->offset scans (fwd, or rev from .end).
@@ -334,16 +335,7 @@ static const char* JABC_CONT_JS = R"JS(
     PROTO["WEAVE"] = P;
   }
 
-  //  delt.apply(base, delta, out): reconstruct a delta target into out (a Buf)
-  g.delt = {
-    apply: (base, delta, out) => {
-      const n = abc._delt_apply(base, delta, out.idle(), 0);
-      out.fed(n);
-      return n;
-    },
-  };
-
-  const isLog = (f) => f === "HUNK" || f === "PACK" || f === "ULOG" || f === "WEAVE";   // u8-backed
+  const isLog = (f) => f === "HUNK" || f === "ULOG" || f === "WEAVE";   // u8-backed
 
   function build(family, u8) {
     const proto = PROTO[family];
@@ -352,7 +344,7 @@ static const char* JABC_CONT_JS = R"JS(
     if (isLog(family)) {                // u8-backed log: use the byte view directly
       v = u8;
       Object.setPrototypeOf(v, proto);
-      v._read = (family === "PACK") ? 12 : 0;   // PACK skips the 12-byte header
+      v._read = 0;
       v._rec = -1;
     } else {
       const M = LANE[laneOf(family)];
@@ -390,7 +382,10 @@ static const char* JABC_CONT_JS = R"JS(
     const b = c.buffer;
     if (b._path) {                                  // booked: trim file to live size
       const M = LANE[c.lane];
-      io._truncate(b._path, (c.size | 0) * M.w * M.A.BYTES_PER_ELEMENT);
+      //  a PACK book (git.pack.book) has no .lane: it's a u8 log written
+      //  start-to-end, so trim to the write head (watermark), no lane scaling.
+      if (M) io._truncate(b._path, (c.size | 0) * M.w * M.A.BYTES_PER_ELEMENT);
+      else   io._truncate(b._path, (b.watermark | 0));
     }
     b._map = null;
   };
@@ -422,6 +417,51 @@ static const char* JABC_CONT_JS = R"JS(
 
   //  WEAVE token identity/anchor hash: hashlet(RAPHash(commit-id ++ ordinal)).
   abc.weaveIdHash = (hash, ord) => abc._weave_idhash(hash, ord | 0);
+
+  //  git: the git/pack-log package (JS-024).  `git.pack` is the offset-pure
+  //  PACK container (migrated, hard cutover, off the old abc "PACK" family);
+  //  `git.delta.apply` is the delta op (migrated off the old global `delt`).
+  //  The native leaves (abc._pack_* / abc._delt_apply) are UNCHANGED — `git`
+  //  only re-homes the JS surface (the SAME PACK_PROTO + delta marshalling).
+  //  A PACK is a u8-backed log: wrap the byte view, pin the mapping (munmap on
+  //  GC), skip the 12-byte header (_read = 12), cursor at -1.
+  const packBuild = (u8) => {
+    const v = u8;
+    Object.setPrototypeOf(v, PACK_PROTO);
+    v._read = 12;                    // PACK skips the 12-byte header
+    v._rec = -1;
+    v.buffer._map = u8;              // pin the mapping (munmap on GC)
+    v.buffer.watermark = 0;
+    return v;
+  };
+  const pack = {
+    ram:  (slots) => packBuild(io._ram(slots)),
+    over: (ta) => packBuild((ta instanceof Uint8Array) ? ta
+                            : new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength)),
+    mmap: (path, mode, slots) => {
+      mode = mode || "rw";
+      return packBuild(io._mmap(path, mode, mode === "c" ? (slots || 0) : 0));
+    },
+    //  book: a sparse file-backed log sized to an upper bound (see abc.book);
+    //  msync + unpin on abc.close (a PACK carries no .lane, so close skips the
+    //  lane-typed trim — a PACK file is written start-to-end, no truncation).
+    book: (path, slots) => {
+      const c = packBuild(io._mmap(path, "c", slots));
+      c.buffer._path = path;
+      return c;
+    },
+  };
+  g.git = {
+    pack,
+    //  delta.apply(base, delta, out): reconstruct a delta target into out (Buf)
+    delta: {
+      apply: (base, delta, out) => {
+        const n = abc._delt_apply(base, delta, out.idle(), 0);
+        out.fed(n);
+        return n;
+      },
+    },
+  };
 
   //  abc.index(lane, {dir, ext, mem}) — a mmap LSM index (JS-022): a stack of
   //  immutable, oldest-first sorted runs (.runs) + a memtable.  The write path

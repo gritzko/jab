@@ -1,10 +1,18 @@
 "use strict";
-// Offset-pure PACK log + DELT.apply: write a raw object and an OFS_DELTA
+// Offset-pure PACK log + git.delta.apply: write a raw object and an OFS_DELTA
 // against it, then read it back and resolve the delta by offset — the keeper
-// read loop (seek -> inflate -> chase base by offset -> apply) in JS.
+// read loop (seek -> inflate -> chase base by offset -> apply) in JS.  JS-024:
+// the PACK container + delta op now live in the `git` package (git.pack /
+// git.delta), hard-migrated off abc.over("PACK") / delt.apply.
 function fail(m) { throw "FAIL " + m; }
 function eq(a, b, m) { if (a !== b) fail(m + ": " + a + " !== " + b); }
 const dec = (u8) => utf8.Decode(u8);
+
+// JS-024 hard cutover: the old abc PACK family + global delt are GONE.
+if (typeof delt !== "undefined") fail("delt global still present (cutover)");
+let cut = false;
+try { abc.over("PACK", new Uint8Array(64)); } catch (e) { cut = true; }
+if (!cut) fail("abc.over(\"PACK\") still builds a PACK container (cutover)");
 
 // two near-identical sizable blobs of VARIED text (distinct lines -> the
 // delta matcher finds the long common runs, so the delta beats raw)
@@ -16,7 +24,7 @@ const s2 = lines.join("\n");
 const v1 = utf8.Encode(s1);
 const v2 = utf8.Encode(s2);
 
-const p = abc.ram("PACK", 1 << 16);
+const p = git.pack.ram(1 << 16);
 p.header();
 const a = p.feed("blob", v1);            // raw object  -> offset a
 const b = p.feed("blob", v2, a);         // suspected-prev @a -> OFS_DELTA
@@ -44,7 +52,7 @@ p.seek(ba);
 const base = io.buf(v1.length + 16);
 p.inflate(base);
 const recon = io.buf(v2.length + 16);
-delt.apply(base.data(), instr.data(), recon);
+git.delta.apply(base.data(), instr.data(), recon);
 eq(dec(recon.data()), dec(v2), "delta resolved == v2");
 
 // GIT-007 cross-impl vector: a log WRITTEN by the JABC binding (via the
@@ -58,7 +66,7 @@ lines[50] = "and another one here, third version";
 const s3 = lines.join("\n");
 const v3 = utf8.Encode(s3);
 
-const q = abc.ram("PACK", 1 << 16);
+const q = git.pack.ram(1 << 16);
 q.header();
 const qa = q.feed("blob", v1);          // raw
 const qb = q.feed("blob", v2, qa);      // OFS_DELTA against qa
