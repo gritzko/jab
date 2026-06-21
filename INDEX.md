@@ -2,6 +2,8 @@
 
 JABC is a thin, anti-bloat JavaScriptCore binding: stock `libjavascriptcore`, the binding holds no memory and no long-lived JS references. Two entities cross the boundary — buffers (JS-owned `Uint8Array`s wrapped in a `Buf` cursor) and file descriptors (plain `number`s). The native layer is leaf-only (syscalls + typed-array fills + mmap); the cursor logic lives in JS. Rationale in [README.md], the JS-facing surface and the ABC→JS mapping in [API.md].
 
+JS-025: `WITH_JS` is ON by default, and `jabc` is built into `${DOG_BIN_DIR}` beside `be`/the dogs so `be <name>` can fork it (`HOMEResolveSibling`) on the repo-local extension `bin/<name>.js` — the LAST `be` dispatch fallback. No JSC is linked into `be`; the tail reaches the script as the JS globals `args` / `process.argv` (JS-015). See `beagle/INDEX.md` and the Extensions concept.
+
 ##  Native modules
 
 ###  JABC.hpp — binding macros + shared decls

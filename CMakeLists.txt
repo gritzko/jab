@@ -34,6 +34,9 @@ set(JABC_SRC main.cpp io.cpp utf8.cpp buf.cpp cont.cpp tok.cpp uri.cpp codec.cpp
 
 add_executable(jabc ${JABC_SRC})
 target_link_libraries(jabc ${JSC_LIB} dog abc-core ${sodium})
+# JS-025: jabc must sit beside `be` so HOMEResolveSibling finds it when
+# `be <name>` forks the extension runtime on bin/<name>.js.
+set_target_properties(jabc PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${DOG_BIN_DIR})
 
 # Table-driven C++ harness over the buf/utf8/io boundary; returns non-zero on
 # any failed row, so CTest fails on a real bug (CLAUDE.md §3).
