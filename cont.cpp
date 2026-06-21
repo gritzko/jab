@@ -162,7 +162,7 @@ static const char* JABC_CONT_JS = R"JS(
       this._count = 0; this._read = 12; this._rec = -1;
       return this;
     };
-    P.feed = function (type, content, prevOff) {
+    P.feed = function (type, content, prevOff, out) {
       const off = this.buffer.watermark;
       const t = (typeof type === "number") ? type : T2N[type];
       //  Resolve the base to its full bytes by offset (the read path); the
@@ -176,6 +176,14 @@ static const char* JABC_CONT_JS = R"JS(
       this._scratch();
       this.buffer.watermark = abc._pack_feed(this, off, t, content, base, bo, this._dsc);
       this._count = (this._count | 0) + 1;
+      //  GIT-010 index-on-append: if given an `out` entry sink (a Buf), drop
+      //  the just-fed object's (sha->offset) wh128 entry in — git-sha the
+      //  content we already hold, no resolve.  The pack-log owns no index.
+      if (out != null) {
+        const idle = out.idle();
+        const n = abc._pack_feed_emit(t, content, off, idle, 0);
+        out.fed(n);
+      }
       return off;
     };
     //  resolve(out): chase this record's delta chain to full bytes via the
@@ -185,6 +193,20 @@ static const char* JABC_CONT_JS = R"JS(
       const b = abc._pack_resolve(this, this._rec, this._bsc, this._dsc);
       out.feed(b);
       return out;
+    };
+    //  scan(out): GIT-010 index-EMIT — walk the WHOLE pack, resolve+git-sha
+    //  each object, and drop one wh128 `(key=hashlet60|type, val=offset)`
+    //  entry per object into the `out` Buf's IDLE via the dog/git PIDXScan.
+    //  Advances out by n*16 bytes and returns a ZERO-COPY BigUint64Array view
+    //  (n*2 u64s: key,val,key,val,...) over the bytes just written — the
+    //  caller pipes them into an abc.index wh128 lane (idx.put(key, val)).
+    //  The pack-log owns NO index: sort/merge/persist/query is the caller's.
+    P.scan = function (out) {
+      this._scratch();
+      const idle = out.idle();
+      const n = abc._pack_scan(this, this.buffer.watermark | 0, idle, this._bsc, this._dsc);
+      out.fed(n * 16);                       // n wh128 entries (16 B each)
+      return new BigUint64Array(idle.buffer, idle.byteOffset, n * 2);
     };
     P.finish = function () { abc._pack_header(this, 0, this._count | 0); return this; };
     P.rewind = function () { this._read = 12; this._rec = -1; return this; };

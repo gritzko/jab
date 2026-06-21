@@ -21,6 +21,7 @@
 extern "C" {
 #include "dog/git/DELT.h"
 #include "dog/git/PACK.h"
+#include "dog/git/PIDX.h"
 }
 
 //  _pack_header(buf, off, count) -> off+12
@@ -184,6 +185,65 @@ static JABC_FN(JABCdeltApply) {
   return JSValueMakeNumber(ctx, (double)(size_t)(og[1] - op));
 }
 
+//  _pack_scan(buf, dataLen, out, base, delta) -> entry count
+//  GIT-010: pure marshalling over the dog/git scan-emit PIDXScan.  Walk the
+//  whole pack [0, dataLen), resolve+git-sha each object, and drop one wh128
+//  `(key=hashlet60|type, val=offset)` entry per object STRAIGHT into the
+//  caller's region `out` (a Buf's IDLE), returning the entry count.  base /
+//  delta are caller-owned resolve scratch (PACKResolveOfs's sizing).  Guards,
+//  ALL before any write: out must be 8-byte aligned (a wh128 u64 view needs
+//  it; a fresh/reset Buf IDLE head is 8-aligned) and hold count*16 bytes
+//  worst case.  A REF_DELTA (no sha-addressed base in an OFS-only log) makes
+//  PIDXScan fail -> throw, so a partial scan never half-fills a reused buffer.
+static JABC_FN(JABCpackScan) {
+  if (argc < 5) JABC_THROW("pack._scan(buf, dataLen, out, base, delta)");
+  u8s c = {}, out = {}, base = {}, delta = {};
+  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  size_t dl = (size_t)JSValueToNumber(ctx, args[1], exception);
+  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCBytesOf(base, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCBytesOf(delta, ctx, args[4], exception)) return JSValueMakeUndefined(ctx);
+  u8cs pack = {c[0], c[0] + dl};
+  pack_hdr hdr = {};
+  u8cs hv = {pack[0], pack[1]};   //  PACKDrainHdr CONSUMES — validate on a copy
+  if (PACKDrainHdr(hv, &hdr) != OK) JABC_THROW("pack.scan: bad header");
+  if (((uintptr_t)out[0] & 7u) != 0)
+    JABC_THROW("pack.scan: out not 8-byte aligned (reset the Buf)");
+  size_t need = (size_t)hdr.count * sizeof(wh128);
+  if ((size_t)$len(out) < need) JABC_THROW("pack.scan: out too small");
+  //  Bwh128 over the caller's region: emit lands at [out[0], out[1]).
+  wh128* wb = (wh128*)out[0];
+  wh128* wcap = (wh128*)(out[0] + (((size_t)$len(out)) / sizeof(wh128)) * sizeof(wh128));
+  wh128* wbuf[4] = {wb, wb, wb, wcap};
+  if (PIDXScan(pack, wbuf, base, delta) != OK)
+    JABC_THROW("pack.scan: scan (ref-delta? out full?)");
+  size_t n = (size_t)(wbuf[2] - wb);   //  emitted entries (DATA grew by n)
+  return JSValueMakeNumber(ctx, (double)n);
+}
+
+//  _pack_feed_emit(type, content, offset, out, outOff) -> 16 (bytes written)
+//  GIT-010: the index-on-append twin — git-sha the content the caller JUST
+//  fed (no resolve) and write ONE wh128 entry at out[outOff].  Mirrors
+//  PIDXFeedEmit; out is the caller's wh128 entry sink (a Buf's IDLE).
+static JABC_FN(JABCpackFeedEmit) {
+  if (argc < 5) JABC_THROW("pack._feed_emit(type, content, offset, out, outOff)");
+  u8 type = (u8)JSValueToNumber(ctx, args[0], exception);
+  u8s content = {}, out = {};
+  if (!JABCBytesOf(content, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u64 offset = (u64)JSValueToNumber(ctx, args[2], exception);
+  if (!JABCBytesOf(out, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
+  size_t oo = (size_t)JSValueToNumber(ctx, args[4], exception);
+  u8* slot = out[0] + oo;
+  if (((uintptr_t)slot & 7u) != 0)
+    JABC_THROW("pack.feedEmit: out slot not 8-byte aligned");
+  if ((size_t)(out[1] - slot) < sizeof(wh128)) JABC_THROW("pack.feedEmit: out full");
+  wh128* wbuf[4] = {(wh128*)slot, (wh128*)slot, (wh128*)slot, (wh128*)slot + 1};
+  u8csc cc = {content[0], content[1]};
+  if (PIDXFeedEmit(wbuf, type, cc, offset) != OK)
+    JABC_THROW("pack.feedEmit: emit");
+  return JSValueMakeNumber(ctx, (double)sizeof(wh128));
+}
+
 static inline void JABCPackInstall(JSObjectRef o) {
   JABC_API_FN(o, "_pack_header", JABCpackHeader);
   JABC_API_FN(o, "_pack_count", JABCpackCount);
@@ -195,6 +255,8 @@ static inline void JABCPackInstall(JSObjectRef o) {
   JABC_API_FN(o, "_pack_ref", JABCpackRef);
   JABC_API_FN(o, "_pack_inflate", JABCpackInflate);
   JABC_API_FN(o, "_pack_resolve", JABCpackResolve);
+  JABC_API_FN(o, "_pack_scan", JABCpackScan);
+  JABC_API_FN(o, "_pack_feed_emit", JABCpackFeedEmit);
   JABC_API_FN(o, "_delt_apply", JABCdeltApply);
 }
 
