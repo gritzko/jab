@@ -17,6 +17,7 @@ JABC is a thin, anti-bloat JavaScriptCore binding: stock `libjavascriptcore`, th
 ###  io.cpp — fds + read/write + mmap (no `File` object, no custody table)
 
  -  `io.open`/`close`/`sync`/`size`/`resize`/`lock`/`unlock`/`stat` — fd lifecycle over abc `FILE*` (`"r"|"rw"|"c"`).
+ -  `io.readdir` — over `FILEScanDir`/`FILEDeepScanDir`, root-relative with dirs marked by a trailing `/` (no `.`/`..`). POLYMORPHIC 2nd arg: absent / a function (sugar for `{callback}`) / an options object `{recursive, callback, hidden}`. No callback → `string[]` (one level, or the flat full subtree under `recursive:true` via native `FILEDeepScanDir`); a callback → `undefined`, with `cb(name)` per entry returning `"more"`/truthy/undefined (continue), `"enough"`/false (stop the whole scan), or `"recur"` (descend a nested scan — a no-op once `recursive:true` already descends). `hidden` (default false) skips dotfile basenames and prunes hidden dirs via `FILESKIP` (omit + don't descend); `hidden:true` includes them. cb runs in-frame, never stashed (rule #4), a throw aborts and propagates; a non-function/non-object 2nd arg throws. Throws on a missing/non-dir path.
  -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); the cursor advance is the JS `Buf`'s job.
  -  `io._mmap` — `FILEMapRO/RW/Create` → `Uint8Array` no-copy, `munmap` on GC (`JABCMapFree`).
  -  `io._ram` — anonymous `MAP_NORESERVE` mmap → `Uint8Array`, `munmap` on GC (`JABCRamFree`).

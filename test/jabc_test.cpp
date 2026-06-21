@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "JABC.hpp"
@@ -167,6 +169,110 @@ int main() {
           "return m.size===7&&utf8.Decode(m.data())==='mapped!'})()");
     unlink(path);
   }
+  //  readdir over a fixture dir: files alpha/beta + a subdir sub/ with a child,
+  //  plus a hidden file .hidden and a hidden subdir .hsub/ with its own child.
+  //  Exercises the polymorphic 2nd arg: 1-level dir-marked array, a bare-fn
+  //  callback scan, the {callback} object equivalent, the {recursive} flat
+  //  listing, recursive+callback, and the {hidden} dotfile filter.
+  char dir[] = "/tmp/jabc_dir_XXXXXX";
+  if (mkdtemp(dir) != NULL) {
+    char f1[64], f2[64], sub[64], kid[80], dot[80], hsub[80], hkid[96];
+    snprintf(f1, sizeof(f1), "%s/alpha", dir);
+    snprintf(f2, sizeof(f2), "%s/beta", dir);
+    snprintf(sub, sizeof(sub), "%s/sub", dir);
+    snprintf(kid, sizeof(kid), "%s/sub/child", dir);
+    snprintf(dot, sizeof(dot), "%s/.hidden", dir);
+    snprintf(hsub, sizeof(hsub), "%s/.hsub", dir);
+    snprintf(hkid, sizeof(hkid), "%s/.hsub/secret", dir);
+    close(open(f1, O_CREAT | O_WRONLY, 0600));
+    close(open(f2, O_CREAT | O_WRONLY, 0600));
+    mkdir(sub, 0700);
+    close(open(kid, O_CREAT | O_WRONLY, 0600));
+    close(open(dot, O_CREAT | O_WRONLY, 0600));
+    mkdir(hsub, 0700);
+    close(open(hkid, O_CREAT | O_WRONLY, 0600));
+    setGlobalStr("DIR_PATH", dir);
+    //  (a) one level: hidden default skips .hidden / .hsub/ ; `sub/` marked.
+    check("readdir_names",
+          "(()=>{let xs=io.readdir(DIR_PATH).slice().sort();"
+          "return xs.length===3&&xs[0]==='alpha'&&xs[1]==='beta'&&xs[2]==='sub/'})()");
+    check("readdir_dirs_marked",
+          "(()=>{let xs=io.readdir(DIR_PATH);"
+          "return xs.includes('sub/')&&xs.includes('alpha')&&!xs.includes('sub')"
+          "&&xs.filter(n=>n.endsWith('/')).length===1})()");
+    check("readdir_missing_throws",
+          "(()=>{try{io.readdir(DIR_PATH+'/nope');return false}catch(e){return true}})()");
+    //  hidden default skips dotfiles; {hidden:true} includes them.
+    check("readdir_hidden_default_skips",
+          "(()=>{let xs=io.readdir(DIR_PATH);"
+          "return !xs.includes('.hidden')&&!xs.includes('.hsub/')})()");
+    check("readdir_hidden_true_lists",
+          "(()=>{let xs=io.readdir(DIR_PATH,{hidden:true});"
+          "return xs.includes('.hidden')&&xs.includes('.hsub/')})()");
+    //  (b) callback form: `enough` stops early (sees < all siblings).
+    check("readdir_cb_enough_stops",
+          "(()=>{let seen=0;io.readdir(DIR_PATH,n=>{seen++;return 'enough'});"
+          "return seen===1})()");
+    check("readdir_cb_more_sees_all",
+          "(()=>{let seen=0;io.readdir(DIR_PATH,n=>{seen++;return 'more'});"
+          "return seen===3})()");
+    check("readdir_cb_throw_propagates",
+          "(()=>{try{io.readdir(DIR_PATH,n=>{throw new Error('boom')});return false}"
+          "catch(e){return e.message==='boom'}})()");
+    //  {callback:fn} behaves EXACTLY like the bare-fn form (same entries).
+    check("readdir_callback_obj_eq_bare",
+          "(()=>{let a=[];io.readdir(DIR_PATH,n=>{a.push(n);return 'more'});"
+          "let b=[];io.readdir(DIR_PATH,{callback:n=>{b.push(n);return 'more'}});"
+          "return a.slice().sort().join(',')===b.slice().sort().join(',')"
+          "&&a.length===3})()");
+    check("readdir_callback_obj_returns_undefined",
+          "(()=>{return io.readdir(DIR_PATH,{callback:n=>'more'})===undefined})()");
+    //  {callback} hidden default still skips the dotfiles.
+    check("readdir_callback_obj_hidden_default",
+          "(()=>{let a=[];io.readdir(DIR_PATH,{callback:n=>{a.push(n)}});"
+          "return !a.includes('.hidden')&&!a.includes('.hsub/')})()");
+    //  (c) recursion reaches sub/child — via the cb `recur` directive, the
+    //  {recursive:true} flat listing, AND {recursive:true, callback}.
+    check("readdir_cb_recur_reaches_child",
+          "(()=>{let names=[];io.readdir(DIR_PATH,n=>{names.push(n);"
+          "return n.endsWith('/')?'recur':'more'});"
+          "return names.includes('sub/child')})()");
+    check("readdir_recursive_flat",
+          "(()=>{let xs=io.readdir(DIR_PATH,{recursive:true}).slice().sort();"
+          "return xs.includes('sub/')&&xs.includes('sub/child')"
+          "&&xs.includes('alpha')&&xs.includes('beta')})()");
+    check("readdir_recursive_returns_array",
+          "(()=>{return Array.isArray(io.readdir(DIR_PATH,{recursive:true}))})()");
+    //  recursive + hidden default: never reaches the hidden subtree.
+    check("readdir_recursive_hidden_pruned",
+          "(()=>{let xs=io.readdir(DIR_PATH,{recursive:true});"
+          "return !xs.includes('.hsub/')&&!xs.includes('.hsub/secret')"
+          "&&!xs.includes('.hidden')})()");
+    check("readdir_recursive_hidden_true_descends",
+          "(()=>{let xs=io.readdir(DIR_PATH,{recursive:true,hidden:true});"
+          "return xs.includes('.hsub/')&&xs.includes('.hsub/secret')"
+          "&&xs.includes('.hidden')})()");
+    //  recursive + callback: cb fires across the subtree; `enough` aborts all.
+    check("readdir_recursive_callback_reaches_child",
+          "(()=>{let names=[];let r=io.readdir(DIR_PATH,"
+          "{recursive:true,callback:n=>{names.push(n)}});"
+          "return r===undefined&&names.includes('sub/child')})()");
+    check("readdir_recursive_callback_enough_aborts",
+          "(()=>{let seen=0;io.readdir(DIR_PATH,"
+          "{recursive:true,callback:n=>{seen++;return 'enough'}});"
+          "return seen===1})()");
+    //  a non-function, non-object 2nd arg is a TypeError-style throw.
+    check("readdir_bad_2nd_arg_throws",
+          "(()=>{try{io.readdir(DIR_PATH,42);return false}catch(e){return true}})()");
+    unlink(hkid);
+    unlink(dot);
+    unlink(kid);
+    unlink(f1);
+    unlink(f2);
+    rmdir(hsub);
+    rmdir(sub);
+    rmdir(dir);
+  }
 
   //  JS-017: io.getenv(name) -> string|undefined ; io.cwd() -> string.
   //  A set var reads back; an unset var is undefined; cwd matches getcwd().
@@ -179,7 +285,6 @@ int main() {
       check("cwd_matches", "io.cwd()===CWD");
     }
   }
-
   //  Release the context FIRST: GC runs the no-copy deallocators
   //  (FILEUnMap/munmap), which touch the FILE subsystem — so tear that down
   //  (FILECloseAll frees FILE_RW) only afterwards.

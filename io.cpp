@@ -153,6 +153,227 @@ static JABC_FN(JABCioStat) {
   return obj;
 }
 
+//  io.readdir — one entry point over FILEScanDir / FILEDeepScanDir with a
+//  POLYMORPHIC 2nd arg.  FILEScanDir delivers each entry as the FULL iterator
+//  path (the scanned root + the entry name; '.'/'..' already skipped, dir
+//  entries carry a trailing '/').  Every shape emits the path RELATIVE to the
+//  scanned root, KEEPING the dir's trailing '/' as the file-vs-dir marker (e.g.
+//  "sub/", "sub/child").  At depth 0 the relative path is just the basename, so
+//  the one-level form lists "alpha", "sub/".
+//
+//  The 2nd arg is dispatched in the native frame:
+//   - absent              -> form 1, options all default.
+//   - a function          -> sugar for {callback: fn} (the directed cb).
+//   - an options object    -> {recursive, callback, hidden} (any subset).
+//   - anything else        -> a TypeError-style throw.
+//  Resulting behaviors:
+//   1. io.readdir(path[, {recursive}]) -> string[]   array form (no callback):
+//        one level, or — with recursive:true — the flat full subtree via the
+//        native FILE_SCAN_DEEP (FILEDeepScanDir).  Dirs marked.
+//   2. io.readdir(path, fn|{callback:fn[, recursive]}) -> undefined   cb(name)
+//        per entry; the cb return is a directive: "more"/truthy/undefined =
+//        continue, "enough"/false = stop the WHOLE scan, "recur" = descend into
+//        this dir first (meaningful only when recursive is false; a no-op once
+//        recursive:true already descends the whole tree).  The cb runs
+//        synchronously inside the scan frame and is never stashed (rule #4); a
+//        cb throw aborts the scan and propagates.
+//   hidden (default false): basenames starting '.' are SKIPPED, and hidden dirs
+//        are NOT descended (the skip returns FILESKIP, which both omits the
+//        entry and prunes recursion — for the native deep scan and the per-entry
+//        "recur" alike).  hidden:true includes dotfiles and descends hidden dirs.
+//
+//  Aborts (cb "enough" / a cb throw) leave the scan via a private non-OK code
+//  so they unwind FILEScanRecurse without masquerading as a FILE error; the
+//  caller tells an abort from a real error by inspecting the context (`stop` /
+//  `*exception`), never by the code's identity.
+con ok64 JABCSCANSTOP = 0x4a414253544f50;  //  "JABSTOP" — binding-private, never RON-decoded
+
+//  Build the root-relative, dir-marked entry name from the full iterator path
+//  into the caller's scratch path buffer.  Empty (the root itself) -> NODATA.
+static ok64 JABCReaddirRel(path8b out, path8p full, size_t rootlen) {
+  a_dup(u8c, data, u8bDataC(full));
+  if ($len(data) <= (ssize_t)(rootlen + 1)) return NODATA;
+  //  Skip "<root>/" — a_rest does the offset arithmetic with bounds checks.
+  a_rest(u8c, rel, data, rootlen + 1);
+  b8 slash = (!$empty(rel) && *$last(rel) == '/');
+  if (slash) u8csShed1(rel);  //  PATHu8bPush rejects a trailing '/'
+  if ($empty(rel)) return NODATA;
+  ok64 o = PATHu8bDup(out, rel);
+  if (o != OK) return o;
+  if (slash) {  //  re-mark the dir
+    a_cstr(s, "/");
+    o = PATHu8bFeed(out, s);
+    if (o != OK) return o;
+  }
+  return OK;
+}
+
+//  Is this entry hidden? — its basename starts with '.'.  Operates on the FULL
+//  iterator path: alias its DATA, drop a trailing '/' (dir entries carry one),
+//  take the basename, test the first byte.  '.'/'..' are already dropped by the
+//  scan, so any leading-dot basename here is a real dotfile / dot-dir.
+static b8 JABCReaddirIsHidden(path8p full) {
+  a_dup(u8c, data, u8bDataC(full));
+  if (!$empty(data) && *$last(data) == '/') u8csShed1(data);
+  u8cs base = {};
+  PATHu8sBase(base, data);
+  return !$empty(base) && $at(base, 0) == '.';
+}
+
+struct JABCReaddirCtx {
+  JSContextRef ctx;
+  JSObjectRef arr;        //  array-building forms (no cb); NULL for the cb form
+  JSObjectRef cb;         //  cb form; NULL otherwise
+  size_t rootlen;         //  byte length of the scanned root (relative-path base)
+  unsigned n;             //  next array index
+  b8 recursive;           //  native deep scan in flight ("recur" is a no-op)
+  b8 hidden;              //  include dotfiles + descend hidden dirs
+  b8 stop;                //  cb said "enough" — abort, but not an error
+  JSValueRef* exception;  //  cb threw — abort and propagate
+};
+
+//  Emit one entry into the result array (no-callback array form).
+static ok64 JABCReaddirEmit(void0p arg, path8p path) {
+  JABCReaddirCtx* c = (JABCReaddirCtx*)arg;
+  //  Hidden filter: FILESKIP both omits this entry AND prunes the deep scan
+  //  from descending into it (a hidden dir).
+  if (!c->hidden && JABCReaddirIsHidden(path)) return FILESKIP;
+  a_path(rel);
+  ok64 o = JABCReaddirRel(rel, path, c->rootlen);
+  if (o == NODATA) return OK;
+  if (o != OK) return o;
+  JSStringRef s = JSStringCreateWithUTF8CString((const char*)$path(rel)[0]);
+  JSObjectSetPropertyAtIndex(c->ctx, c->arr, c->n++,
+                             JSValueMakeString(c->ctx, s), NULL);
+  JSStringRelease(s);
+  return OK;
+}
+
+//  Map a cb's return value onto a scan directive.  "recur" is signalled to the
+//  trampoline via *recur (caller descends); the ok64 return drives continue/stop.
+static ok64 JABCReaddirDirective(JABCReaddirCtx* c, JSValueRef r, b8* recur) {
+  *recur = NO;
+  if (JSValueIsString(c->ctx, r)) {
+    char tag[8] = "";
+    JSStringRef s = JSValueToStringCopy(c->ctx, r, NULL);
+    JSStringGetUTF8CString(s, tag, sizeof(tag));
+    JSStringRelease(s);
+    if (strcmp(tag, "enough") == 0) { c->stop = YES; return JABCSCANSTOP; }
+    if (strcmp(tag, "recur") == 0) { *recur = YES; return OK; }
+    return OK;  //  "more" and any other string -> continue
+  }
+  //  Non-string: false -> stop, truthy/undefined -> continue.
+  if (!JSValueIsUndefined(c->ctx, r) && !JSValueToBoolean(c->ctx, r)) {
+    c->stop = YES;
+    return JABCSCANSTOP;
+  }
+  return OK;
+}
+
+//  cb-form trampoline: call cb(name), map the directive, descend on "recur".
+static ok64 JABCReaddirCall(void0p arg, path8p path) {
+  JABCReaddirCtx* c = (JABCReaddirCtx*)arg;
+  //  Hidden filter: FILESKIP omits this entry AND, under a native deep scan
+  //  (recursive:true), prunes descent into a hidden dir.  In the per-entry
+  //  (recursive:false) form the cb never gets a chance to "recur" into it.
+  if (!c->hidden && JABCReaddirIsHidden(path)) return FILESKIP;
+  a_path(rel);
+  ok64 o = JABCReaddirRel(rel, path, c->rootlen);
+  if (o == NODATA) return OK;
+  if (o != OK) return o;
+  JSStringRef ns = JSStringCreateWithUTF8CString((const char*)$path(rel)[0]);
+  JSValueRef name = JSValueMakeString(c->ctx, ns);
+  JSStringRelease(ns);
+  JSValueRef exc = NULL;
+  JSValueRef r = JSObjectCallAsFunction(c->ctx, c->cb, NULL, 1, &name, &exc);
+  if (exc != NULL) {  //  a cb throw aborts the scan and propagates
+    *c->exception = exc;
+    return JABCSCANSTOP;
+  }
+  b8 recur = NO;
+  o = JABCReaddirDirective(c, r, &recur);
+  if (o != OK) return o;  //  "enough"/false
+  //  "recur" is a no-op once a native deep scan already descends every dir.
+  if (recur && !c->recursive) {
+    //  Descend via a NESTED FILEScanDir on the subdir.  The cb form decides
+    //  recursion per entry, so FILE_SCAN_DEEP (which descends unconditionally)
+    //  can't express it — we hand-roll one nested scan on a FRESH path buffer
+    //  (the live iterator buffer must not be re-driven mid-iteration).  rootlen
+    //  stays the ORIGINAL root, so nested entries come out relative ("sub/child").
+    a_path(sub);
+    ok64 d = PATHu8bDup(sub, u8bDataC(path));
+    if (d != OK) return d;
+    d = FILEScanDir(sub, JABCReaddirCall, c);
+    if (d != OK && d != JABCSCANSTOP) return d;
+    if (d == JABCSCANSTOP) return d;  //  propagate stop/throw out of the tree
+  }
+  return OK;
+}
+
+//  Read a boolean property off the options object (absent -> false).
+static b8 JABCReaddirOptBool(JSContextRef ctx, JSObjectRef opts, const char* key) {
+  JSStringRef k = JSStringCreateWithUTF8CString(key);
+  JSValueRef v = JSObjectGetProperty(ctx, opts, k, NULL);
+  JSStringRelease(k);
+  return JSValueToBoolean(ctx, v);
+}
+
+static JABC_FN(JABCioReaddir) {
+  if (argc < 1) JABC_THROW("io.readdir(path[, fn|{recursive,callback,hidden}])");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.readdir(): bad path");
+  }
+  size_t rootlen = (size_t)u8bDataLen(path);
+
+  //  Dispatch the polymorphic 2nd arg into {cb, recursive, hidden}.
+  JSObjectRef cb = NULL;
+  b8 recursive = NO, hidden = NO;
+  if (argc > 1 && !JSValueIsUndefined(ctx, args[1]) &&
+      !JSValueIsNull(ctx, args[1])) {
+    if (!JSValueIsObject(ctx, args[1]))
+      JABC_THROW("io.readdir(): 2nd arg must be a function or an options object");
+    JSObjectRef o2 = (JSObjectRef)args[1];
+    if (JSObjectIsFunction(ctx, o2)) {
+      cb = o2;  //  bare function is sugar for {callback: fn}
+    } else {
+      recursive = JABCReaddirOptBool(ctx, o2, "recursive");
+      hidden = JABCReaddirOptBool(ctx, o2, "hidden");
+      JSStringRef k = JSStringCreateWithUTF8CString("callback");
+      JSValueRef cbv = JSObjectGetProperty(ctx, o2, k, NULL);
+      JSStringRelease(k);
+      if (!JSValueIsUndefined(ctx, cbv) && JSValueIsObject(ctx, cbv) &&
+          JSObjectIsFunction(ctx, (JSObjectRef)cbv))
+        cb = (JSObjectRef)cbv;
+    }
+  }
+
+  //  Callback present -> directed scan, returns undefined.  recursive picks the
+  //  native deep scan (FILEDeepScanDir, descends every dir) vs the one-level
+  //  scan where the cb decides per-entry "recur" nesting.
+  if (cb != NULL) {
+    JABCReaddirCtx c = {ctx, NULL, cb, rootlen, 0, recursive, hidden, NO,
+                        exception};
+    ok64 o = recursive ? FILEDeepScanDir(path, JABCReaddirCall, &c)
+                       : FILEScanDir(path, JABCReaddirCall, &c);
+    if (*exception) return JSValueMakeUndefined(ctx);  //  cb threw
+    if (o != OK && o != JABCSCANSTOP) JABC_THROW(strerror(errno));
+    JABC_UNDEF;
+  }
+
+  //  No callback -> build the flat result array in this binding frame; recursive
+  //  uses the native deep scan, otherwise one level.  Dirs stay marked.
+  JSObjectRef arr = JSObjectMakeArray(ctx, 0, NULL, exception);
+  if (*exception || arr == NULL) return JSValueMakeUndefined(ctx);
+  JABCReaddirCtx c = {ctx, arr, NULL, rootlen, 0, recursive, hidden, NO,
+                      exception};
+  ok64 o = recursive ? FILEDeepScanDir(path, JABCReaddirEmit, &c)
+                     : FILEScanDir(path, JABCReaddirEmit, &c);
+  if (o != OK) JABC_THROW(strerror(errno));
+  return arr;
+}
+
 //  io._read(fd, u8) -> n  (0 = EOF).  Single read into the typed array.
 static JABC_FN(JABCioRead) {
   if (argc < 2) JABC_THROW("io._read(fd, Uint8Array)");
@@ -377,6 +598,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "lock", JABCioLock);
   JABC_API_FN(io, "unlock", JABCioUnlock);
   JABC_API_FN(io, "stat", JABCioStat);
+  JABC_API_FN(io, "readdir", JABCioReaddir);
   JABC_API_FN(io, "_read", JABCioRead);
   JABC_API_FN(io, "_write", JABCioWrite);
   JABC_API_FN(io, "_mmap", JABCioMmap);

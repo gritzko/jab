@@ -135,11 +135,30 @@ io.size(fd);                      // → number                      (FILESize)
 io.resize(fd, n);                                                   // (FILEResize)
 io.lock(fd, true); io.unlock(fd); // flock LOCK_EX / LOCK_UN        (FILELock)
 let st = io.stat("data");         // {size, mtime, mode, kind}     (FILEStat)
+let ns = io.readdir("dir");       // → string[], dirs marked "x/"  (FILEScanDir)
+io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"recur" directive
+let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepScanDir)
+let h = io.readdir("dir", {hidden:true});       // → incl. dotfiles ('.x')
+io.readdir("dir", {recursive:true, callback:n=>{}}); // cb across the subtree
 let {pid, stdin, stdout} = io.spawn("/bin/cat", ["cat"]); // fds    (FILESpawn)
 let n = io.reap(pid);             // wait, → exit code              (FILEReap)
 let dir = io.cwd();               // process working directory      (FILEGetCwd)
 let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
+
+`io.readdir` names are root-relative; directories carry a trailing `/`
+(`"alpha"`, `"sub/"`, recursively `"sub/child"`), so files vs dirs are
+distinguishable. The 2nd arg is **polymorphic**: absent, a function (sugar for
+`{callback:fn}`), or an options object `{recursive, callback, hidden}` (any
+subset). With no callback it returns the `string[]` — one level, or the flat
+full subtree under `recursive:true` (`FILEDeepScanDir`). With a callback it
+returns `undefined` and runs `cb(name)` per entry inside the scan (never
+stashed); the return directs traversal — `"more"`/truthy/`undefined` continue,
+`"enough"`/`false` stop the whole scan, `"recur"` descends into the entry (a
+dir) before the next sibling (a no-op once `recursive:true` already descends).
+`hidden` (default `false`) skips dotfile basenames and does not descend hidden
+dirs; `hidden:true` includes them. A `cb` throw aborts and propagates; a
+2nd arg that is neither a function nor an object throws.
 
 ##  feed/drain over fds
 
