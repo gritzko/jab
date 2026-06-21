@@ -1,87 +1,154 @@
 #   js — JABC (JavaScriptCore bindings) module index
 
-JABC is a thin, anti-bloat JavaScriptCore binding: stock `libjavascriptcore`, the binding holds no memory and no long-lived JS references. Two entities cross the boundary — buffers (JS-owned `Uint8Array`s wrapped in a `Buf` cursor) and file descriptors (plain `number`s). The native layer is leaf-only (syscalls + typed-array fills + mmap); the cursor logic lives in JS. Rationale in [README.md], the JS-facing surface and the ABC→JS mapping in [API.md].
-
-JS-025: `WITH_JS` is ON by default, and `jabc` is built into `${DOG_BIN_DIR}` beside `be`/the dogs so `be <name>` can fork it (`HOMEResolveSibling`) on the repo-local extension `bin/<name>.js` — the LAST `be` dispatch fallback. No JSC is linked into `be`; the tail reaches the script as the JS globals `args` / `process.argv` (JS-015). See `beagle/INDEX.md` and the Extensions concept.
-
-##  Native modules
+JABC is a thin, anti-bloat JavaScriptCore binding over stock `libjavascriptcore`: it holds no memory and no long-lived JS refs (rule #4). Only buffers (JS-owned `Uint8Array`s in a `Buf` cursor) and fds (`number`s) cross the boundary. The native layer is leaf-only (syscalls, fills, mmap); all cursor/format logic lives in JS. `WITH_JS` is ON by default and `jabc` is built into `${DOG_BIN_DIR}` beside `be`, so `be <name>` forks it to run `bin/<name>.js` (the last `be` fallback). See [README.md]/[API.md]; loops in [POL.md]/[NET.md].
 
 ###  JABC.hpp — binding macros + shared decls
 
-`JABC_FN` defines a native callback; `JABC_THROW`/`JABC_UNDEF` are the error/return forms; `JABC_API_OBJECT`/`JABC_API_FN` register a global object / its methods. `JABCBytesOf` is the one boundary touch — a typed array's offset-adjusted backing range as a `u8s` (adds `byteOffset`, NULL-checks a detached buffer).
+Registration/error glue plus the one boundary touch shared by every leaf.
 
-###  utf8.cpp — text + the bytes helper
+ -  `JABC_FN` — declare a native callback; `JABC_THROW`/`JABC_UNDEF` are its error/empty-return forms.
+ -  `JABC_API_OBJECT`/`JABC_API_FN` — register a fresh global object / attach a native method to it.
+ -  `JABCBytesOf` — a typed array's offset-adjusted backing range as a `u8s` (adds `byteOffset`, fails on a detached buffer).
+ -  `JSOfCString` — a small JS string value from a C string (error text / keys).
+ -  install hooks — `JABC*Install`/`Uninstall` entry points main calls per module.
 
- -  `utf8.encodeInto(str, dst)` — encode UTF-8 into a caller-owned `Uint8Array`, return `n`; stops on a code-point boundary (no half multibyte), lone surrogates → U+FFFD.
- -  `utf8.Decode(u8)` — validate (abc `utf8sValid`/`utf8sDrain32`) then build a JS string via `JSStringCreateWithCharacters` (explicit length, embedded NULs survive).
- -  `JSOfCString` / `JABCBytesOf` — small JS string from a C string; typed-array range (defined here, shared).
+###  utf8.cpp — UTF-8 text + the bytes helper
 
-###  io.cpp — fds + read/write + mmap (no `File` object, no custody table)
+Validated, length-explicit conversion between JS strings and caller-owned byte buffers.
 
- -  `io.open`/`close`/`sync`/`size`/`resize`/`lock`/`unlock`/`stat` — fd lifecycle over abc `FILE*` (`"r"|"rw"|"c"`).
- -  `io.readdir` — over `FILEScanDir`/`FILEDeepScanDir`, root-relative with dirs marked by a trailing `/` (no `.`/`..`). POLYMORPHIC 2nd arg: absent / a function (sugar for `{callback}`) / an options object `{recursive, callback, hidden}`. No callback → `string[]` (one level, or the flat full subtree under `recursive:true` via native `FILEDeepScanDir`); a callback → `undefined`, with `cb(name)` per entry returning `"more"`/truthy/undefined (continue), `"enough"`/false (stop the whole scan), or `"recur"` (descend a nested scan — a no-op once `recursive:true` already descends). `hidden` (default false) skips dotfile basenames and prunes hidden dirs via `FILESKIP` (omit + don't descend); `hidden:true` includes them. cb runs in-frame, never stashed (rule #4), a throw aborts and propagates; a non-function/non-object 2nd arg throws. Throws on a missing/non-dir path.
- -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); the cursor advance is the JS `Buf`'s job.
- -  `io._mmap` — `FILEMapRO/RW/Create` → `Uint8Array` no-copy, `munmap` on GC (`JABCMapFree`).
- -  `io._ram` — anonymous `MAP_NORESERVE` mmap → `Uint8Array`, `munmap` on GC (`JABCRamFree`).
- -  `io._msync` — flush a mapped typed array's pages (raw `msync`, no descriptor lookup).
- -  `io.cwd`/`io.getenv` — process cwd (`FILEGetCwd`) / env var (`FILEGetEnv`, `undefined` if unset); pure marshalling, no held ref.
- -  `io.unlink`/`rename`/`mkdir` — remove / atomically rename / create-with-parents a path (`FILEUnLink`/`FILERename`/`FILEMakeDirP`); pure marshalling. `rename`+`mkdir` back the JS-022 index flush (book a run under a temp name, then rename it in) and run-dir creation.
- -  `io.spawn`/`spawnFds`/`reap` — process leaves (JS-020), pure marshalling over `FILESpawn`/`FILESpawnFds`/`FILEReap`. argv (a JS `string[]`) → a `u8css` over per-call STACK scratch (NUL-terminated bytes parked in PAST per element); `path` → `JABCPath` (NUL-termed `path8b`). `io.spawn(path,argv)`→`{pid,stdin,stdout}` (pipe fds; stderr INHERITED); `io.spawnFds(path,argv,inFd,outFd)`→`pid` (`-1`=inherit); `io.reap(pid)`→`{code}` on clean exit (any status) or `{signal}` on `FILESIGNAL` (exactly one key). fds + pid cross as numbers; caller owns + closes every fd; no held JS ref, no reap-on-GC (rule #4).
+ -  `utf8.encodeInto(str, dst)` — encode into a caller-owned `Uint8Array`, return `n`; stops on a boundary (lone surrogates → U+FFFD).
+ -  `utf8.Decode(u8)` — validate then build a JS string (explicit length, so embedded NULs survive).
+
+###  io.cpp — fds, read/write, mmap, process leaves
+
+Raw syscall leaves over abc `FILE*`; no `File` object and no custody table (the caller owns every fd).
+
+ -  `io.open`/`close`/`sync`/`size`/`resize`/`lock`/`unlock`/`stat` — fd lifecycle (`"r"|"rw"|"c"`).
+ -  `io.readdir(path[, cbOrOpts])` — scan a dir (dirs trail `/`); polymorphic 2nd arg (cb / `{recursive,callback,hidden}`), cb in-frame.
+ -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); cursor advance is the `Buf`'s job.
+ -  `io._mmap`/`io._ram`/`io._msync` — file or anon mmap → `Uint8Array` (munmap on GC); flush a mapped view's pages.
+ -  `io.cwd`/`getenv`/`unlink`/`rename`/`mkdir` — cwd / env var / remove / atomic rename / mkdir-with-parents (back the JS-022 index flush).
+ -  `io.spawn`/`spawnFds`/`reap` — process leaves (JS-020): spawn → `{pid,stdin,stdout}`/pid, reap → `{code}`/`{signal}` (fds/pids are numbers).
  -  `io.log` — write strings / typed arrays to stderr.
 
-###  buf.cpp — the `Buf` cursor class + constructors (embedded JS)
+###  buf.cpp — the `Buf` cursor class + constructors
 
-The `Buf` class and the public API are a raw-string-literal JS bundle (no js2c/node). `Buf` wraps a `Uint8Array` + the `PAST|DATA|IDLE` boundaries: `feed`/`feed1`/`feedStr`/`fed` (append), `take`/`skip` (consume), `data`/`idle`/`past` (no-copy views), `shed`/`pop`/`reset`/`shift`/`splice`/`grow`/`msync`. Constructors `io.buf` (heap), `io.ram` (anon mmap), `io.mmap` (file); `io.read`/`write`/`readAll`/`writeAll`/`readv`/`writev` dispatch over `Buf` or a bare `Uint8Array`. `io.book` and native vectored I/O are not wired yet (see Outcome in API/tickets).
+An embedded JS bundle: a `Buf` wraps a `Uint8Array` plus its `PAST|DATA|IDLE` boundaries, the one cursor abstraction over all backings.
+
+ -  `Buf` — `feed`/`feed1`/`feedStr`/`fed` (append), `take`/`skip` (consume), `data`/`idle`/`past` (views), `shed`/`pop`/`reset`/`shift`/`splice`/`grow`/`msync`.
+ -  `io.buf`/`io.ram`/`io.mmap` — `Buf` constructors over heap / anon mmap / a file.
+ -  `io.read`/`write`/`readAll`/`writeAll`/`readv`/`writev` — I/O dispatch over a `Buf` or a bare `Uint8Array`.
 
 ###  cont.cpp — container framework over abc logs
 
-Per-(family,lane) JS prototypes bound once to native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`). Families: HEAP/HASH lanes, HUNK, ULOG, WEAVE. Each native leaf is pure marshalling — resolve a typed array to a `u8s` and call one abc/dog function; no format logic in the binding. JS-024: the PACK container + the delta op are NO LONGER an `abc` family — they were hard-migrated into the `git` package (`git.pack` / `git.delta`, see `pack.hpp` below); `abc.over("PACK")` no longer builds anything and the global `delt` is gone.
+Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`) and the `git` package; families are HEAP/HASH/HUNK/ULOG/WEAVE (PACK migrated to `git`).
 
- -  `index.hpp` — INDEX binding (JS-022): the 3 native leaves an `abc.index` LSM rides — `_findge_<lane>`→`<lane>sFindGE` (binary-search point), `_seekrange_<lane>`→`HIT<lane>SeekRange` (range/prefix drain), `_compact_<lane>`→`HIT<lane>Compact` (1/8 ladder). All three are backing-agnostic (typed-array views only). `abc.index(lane, {dir, ext, mem})` (in `JABC_CONT_JS`) owns a stack of sorted runs (`.runs`, oldest-first) + a memtable, with `.put`/`.flush`/`.compact`/`.get` (point) /`.range`/`.prefix`/`.seek`. Two run backings (JS-side branch on `opts.dir`): **on-disk** (`dir` present) = `abc.book` files, `close` msync+trim → `io.rename` → re-open RO, an existing dir is re-loaded; **in-memory** (`dir` absent) = anonymous `io.ram` runs, no files, GC-munmapped, gone at exit, starts empty. The write path is PURE JS over the existing leaves (memtable `sort` → `abc.merge` into a fresh run). `.range`/`.prefix` STREAM hits through an in-frame cb (rule #4, mirror `io.readdir(path,cb)`) via the native `_seekrange_` fast-drain (NO cross-run dedup — collapse is a compaction-time concern). `.seek(needle)` is a PURE-JS PULL cursor: positions each source (runs via `_findge_`, plus the seek-time memtable snapshot) at the first elem `>= needle`, then `.next()` pulls ONE merged entry at a time (binary min-heap over the heads + full-element newest-wins dedup) exposing `.key`/`.val`/`.entry`, `false` at end — ALL cursor state in JS (no held native cursor; only the per-source `_findge_` binary search crosses). Lanes: `u64` (scalar) + `wh128` ((key,val), point on key); `kv64` deferred (key-only `Z` ⇒ non-full-element dedup). v1 deletes = newest run shadows older AT QUERY (no tombstone drop); compaction collapses identical rows only (keyed compaction deferred). On open a run validates `byteLength % (w*BPE) === 0`.
- -  `pack.hpp` — PACK binding (GIT-007), pure marshalling over the dog/git pack core: `_feed`→`PACKu8sFeedObj` (raw|OFS_DELTA decided there), `_resolve`→`PACKResolveOfs`, `_next`→`PACKRecordEnd`, `_delt_apply`→`DELTApply`; sha→offset index + base resolution stay in JS. JS-024: the JS surface is the `git` package (`JABC_CONT_JS`) — `git.pack.{ram,over,mmap,book}` build the offset-pure PACK container (the SAME `PACK_PROTO`: header/feed/inflate/resolve/seek/next/finish + count/type/size/baseOffset/ref/offset), `git.delta.apply(base,delta,out)` is the delta op. Migrated (hard cutover) off the old `abc` "PACK" family + global `delt`; the native leaves stay on `abc._pack_*`/`abc._delt_apply`, only re-exposed under `git`. GIT-010: `_pack_scan`→`PIDXScan` + `_pack_feed_emit`→`PIDXFeedEmit` add the index-EMIT pair — `pack.scan(out)` walks the whole pack and drops one wh128 `(key=hashlet60|type, val=offset)` per object into `out`'s IDLE (returns a `BigUint64Array` view of `[k,v,…]`), `pack.feed(type,content,prev,out)` appends the just-fed object's entry; the pack owns no index, the caller pipes entries into an `abc.index` wh128 lane.
- -  `weave.hpp` — WEAVE binding over dog/WEAVE: a WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call. `fold`→`WEAVENext`, `merge`→`WEAVEMerge` rewrite the whole blob; `alive`/`produce`→`WEAVEAlive`/`WEAVEProduce`, `scope`→`WEAVEScope`, the `rewind`/`next` cursor→`WEAVEStep`. `emitDiff`/`emitFull`→`WEAVEEmitDiff`/`WEAVEEmitFull` append diff `'H'` records (toks carry the per-token side) into a HUNK container read by the HUNK cursor — the C callback IS the sink (rule #4, no JS closure); `merged`→`WEAVEEmitMerged` renders an N-side merge into a Buf, framing conflicts `<<<< |||| >>>>`. Commit ids cross as 16-char hex hashlet strings (hi64 of the commit sha1); all u64↔hex lives in the leaf.
+ -  `abc.ram`/`mmap`/`over`/`book` — build a container over anon mmap / a file / an existing view / a sparse book file.
+ -  `abc.merge`/`abc.intersect` — k-way merge / intersect of sorted inputs into an out region.
+ -  `abc.index(lane, {dir,ext,mem})` — see `index.hpp`; the mmap LSM constructor.
+ -  `git.pack.{ram,over,mmap,book}` — see `pack.hpp`; the offset-pure PACK container.
+ -  `git.delta.apply(base, delta, out)` — see `pack.hpp`; reconstruct a delta target into an out `Buf`.
+ -  `git.tree(bytes[, cb])` — pull cursor over a tree blob: `.next()` → `.mode`/`.name` (zero-copy)/`.str`/`.sha`; `cb` form runs in-frame.
+ -  `git.parseCommit(bytes)` — eager parse → `{tree, parents[], foster[], author, committer, body}` (hex shas, decoded idents).
+ -  `abc.weaveIdHash(hash, ord)` — WEAVE token identity hash, `hashlet(RAPHash(commit-id ++ ordinal))`.
+
+###  index.hpp — INDEX binding: the mmap LSM (JS-022)
+
+The 3 backing-agnostic native leaves an `abc.index` rides, plus the constructor (whose write path is pure JS); lanes `u64` and `wh128` (`kv64` deferred).
+
+ -  `_findge_<lane>`/`_seekrange_<lane>`/`_compact_<lane>` — binary-search point, range/prefix drain, 1/8-ladder compaction leaf.
+ -  `abc.index(...)` — a stack of oldest-first sorted runs (`.runs`) + a memtable, on-disk (`dir`) or in-memory (anon `io.ram`).
+ -  `.put`/`.flush`/`.compact`/`.get` — write to memtable, merge into a fresh run, compact, point lookup.
+ -  `.range`/`.prefix` — stream hits through an in-frame cb (no cross-run dedup; collapse is compaction's job).
+ -  `.seek(needle)` — pure-JS pull cursor; `.next()` yields one merged entry (min-heap + newest-wins), exposing `.key`/`.val`/`.entry`.
+
+###  pack.hpp — PACK + git object parsers (GIT-007/010, JS-028)
+
+Pure marshalling over dog/git: the offset-addressed pack core, the delta op, the pack→index EMIT pair, and the git tree/commit parsers (all re-homed under the `git` package, see cont.cpp).
+
+ -  `_feed`/`_resolve`/`_next`/`_delt_apply` — record feed, OFS base resolve, record end, delta apply (sha→offset index stays in JS).
+ -  `PACK_PROTO` — header/feed/inflate/resolve/seek/next/finish + count/type/size/baseOffset/ref/offset on a `git.pack`.
+ -  `_pack_scan`/`_pack_feed_emit` — one wh128 `(hashlet60|type → offset)` per object (`pack.scan`) or append (`pack.feed`) for an index lane.
+ -  `_git_tree_next(bytes, off)` — drain ONE tree entry → `{mode,nameStart,nameEnd,sha,nextOff}`, backing `git.tree`.
+ -  `_git_parse_commit(bytes)` — over `GITu8sDrainCommit`+`GITu8sCommitTree` → the `git.parseCommit` object.
+
+###  weave.hpp — WEAVE binding over dog/WEAVE
+
+A WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call; commit ids cross as 16-char hex hashlet strings (all u64↔hex in the leaf).
+
+ -  `fold`/`merge` — `WEAVENext`/`WEAVEMerge`, rewrite the whole blob (fold a diff in / merge revs).
+ -  `alive`/`produce`/`scope` — `WEAVEAlive`/`WEAVEProduce`/`WEAVEScope`: the live text, per-rev produce, scope bitmaps.
+ -  `rewind`/`next` — the `WEAVEStep` token cursor.
+ -  `emitDiff`/`emitFull` — append diff `'H'` records into a HUNK container; the C callback is the sink (no JS closure).
+ -  `merged` — `WEAVEEmitMerged` renders an N-side merge into a `Buf`, framing divergent runs with the standard git-style conflict fences.
 
 ###  tok.cpp / tok.hpp — generic source tokenizer (JS-023)
 
-The JS face of `dog/tok`'s `TOKLexer`. ONE native leaf `tok._tok_parse_into(srcBytes, lang, outU8) -> tokenCount` shares the SAME core as `HUNK.dogenize` — `HUNKu32bTokenize` (`dog/HUNK.c`) run STRAIGHT into the caller's region `outU8` (no parse logic duplicated, no scratch copy). `lang` is an extension (the core strips a leading dot); unknown/empty falls back to plain text (`TXTTLexer`). Guards, all BEFORE any write: source `> 0xFFFFFF` (16 MiB, the 24-bit offset cap) throws; `outU8` not 4-byte aligned throws (a `tok32` view must be aligned); `outU8` smaller than the `(srcn+1)` tok32 worst case throws (so a partial lex can't corrupt a reused buffer); empty → empty array. The JS `tok.parse(bytes, lang, out?)` dispatches: without `out` it allocates a fresh worst-case `(srcLen+1)*4`-byte scratch, lexes into it, and returns a fresh trimmed `Uint32Array` (unchanged behavior); with `out` (a `Buf`) it lexes into `out.idle()`, advances `out.fed(n*4)`, and returns a ZERO-COPY `Uint32Array` view over the bytes just written — so one `Buf` is reusable across parses (`reset()` between, the `git.delta.apply(…,out)` convention). The pure-JS `TokStream` cursor (embedded `R"JS"` bundle) decodes `tag`/`custom`/`side`/`end` by bit math mirroring `tok32Tag`/`Offset`/`Side`; `start` = the previous token's `end` (0 for i=0). It PINS the source (offsets are positions): `text(src)` is a zero-copy `subarray`, `str(src)` decodes via `utf8.Decode`.
+The JS face of `dog/tok`'s `TOKLexer`, sharing the SAME core as `HUNK.dogenize` run straight into the caller's region (no duplicated parse logic).
 
-###  codec.cpp — byte transforms + `ron60` codec (hex / sha / ron)
+ -  `tok._tok_parse_into(src, lang, outU8)` — the one leaf, lexes into `outU8` → count; guards (16 MiB, align, capacity) fire pre-write.
+ -  `tok.parse(bytes, lang, out?)` — no `out` → a fresh trimmed `Uint32Array`; an `out` `Buf` → lex into `out.idle()`, advance `fed`, zero-copy.
+ -  `TokStream` — pure-JS cursor decoding `tag`/`custom`/`side`/`end` by bit math; `text(src)` zero-copy, `str(src)` decodes (source pinned).
 
-Pure stateless transforms, no held refs. `hex.encode/decode/encodeInto` (abc/HEX), `sha1`/`sha256` (dog/git SHA1 + abc/SHA) → the sha lane. `ron.encode/decode` cross `ron60`↔BigInt (RON base64). `ron` time codec (JS-021) interprets a `ron60` as a ULOG `ts`: native leaves `_now`→`RONNow`, `_ofMs(ms)`→`localtime`+`RONOfTime`, `_date(ron60)`→`RONToTime`+`mktime`+`DOGutf8sFeedDate`; the embedded `JABC_RON_JS` adds `ron.now()` (BigInt), `ron.of(Date|ms)` (Date→`getTime()`), `ron.date(r)`→relative string (`be log` "12:34"/"Tue05" form). All localtime-aligned like `RONNow`; `ron60` only spans 2000-2099 (`RONOfTime` throws out of range).
+###  codec.cpp — byte transforms + `ron60` codec (hex / sha / ron / time)
 
-###  pol.cpp — `pol` event loop over abc/POL (one trampoline, JS owns the table)
+Pure stateless transforms holding no refs, plus the `ron60`-as-timestamp codec (JS-021); `ron60` spans 2000-2099 only.
 
-The `poll(2)` loop binds `abc/POL` keeping JABC rule #4: C holds NO per-fd JS closures. The `fd→handler` table + wrappers live in an embedded JS bundle (like `Buf`); C holds only two protected router refs (`pol._fd`/`pol._timer`) and routes every ready fd / timer tick through them. `pol` carries readiness; handlers do their own `io.*` I/O. v1 = one timer (POL keys timers by C callback pointer). API + contract in [POL.md].
+ -  `hex.encode`/`decode`/`encodeInto` — abc/HEX byte↔hex transforms.
+ -  `sha1`/`sha256` — dog/git SHA1 + abc/SHA into the sha lane.
+ -  `ron.encode`/`ron.decode` — `ron60`↔BigInt (RON base64).
+ -  `ron.now()`/`ron.of(Date|ms)`/`ron.date(r)` — a `ron60` as a ULOG `ts`: now, from a Date/ms, the relative `be log` string (localtime).
 
- -  `pol.watch(fd, mask, handler)` / `more` / `unwatch` — per-fd interest + handler; handler returns the next mask (`0` drops the fd). `pol.default` catches handler-less fds.
- -  `pol.every(ms, fn)` / `pol.after(ms, fn)` / `pol.untimer` — periodic / one-shot timer (`fn` returns next ms; `≥1h` removes).
- -  `pol.run(ns)` / `pol.stop` / `pol.sleep` / `pol.any` / `pol.now` — drive (`pol.NEVER`=forever), break, sleep, query; a handler throw unwinds out of `run()`.
- -  `pol.init(maxfd)` — (re)size the fd table + clear state; refused from inside a running loop. Consts: `pol.IN/OUT/ERR/HUP/PRI/NVAL`, `pol.SEC/MS/NEVER`.
+###  pol.cpp — `pol` event loop over abc/POL
 
-###  net.cpp — net/dgram + Node timers over pol (sockets are fds)
+The `poll(2)` loop, rule #4 kept: C holds NO per-fd JS closures — the `fd→handler` table lives in an embedded JS bundle, C routes through two protected refs. Contract in [POL.md].
 
-Node-style async API on top of `pol`: native socket leaves return bare fds (EAGAIN → `-1`), and the EventEmitter, per-socket read/write `Buf`s, and the `setTimeout`/`setInterval` timer wheel all live in the embedded JS bundle. A socket is an fd registered with `pol.watch`; readiness drives the events; transfers are `recv`/`send`. Full surface + contract in [NET.md].
+ -  `pol.watch(fd, mask, handler)`/`more`/`unwatch` — per-fd interest + handler (returns next mask, `0` drops fd); `pol.default` for the rest.
+ -  `pol.every(ms, fn)`/`after(ms, fn)`/`untimer` — periodic / one-shot timer (`fn` returns next ms; `≥1h` removes).
+ -  `pol.run(ns)`/`stop`/`sleep`/`any`/`now` — drive (`pol.NEVER`=forever), break, sleep, query; a handler throw unwinds `run()`.
+ -  `pol.init(maxfd)` — (re)size the fd table + clear state (refused mid-loop). Consts: `pol.IN/OUT/ERR/HUP/PRI/NVAL`, `pol.SEC/MS/NEVER`.
 
- -  `net.createServer(onConn)` / `server.listen(port, host?, cb?)` / `server.close()` — TCP accept loop over `TCPListen`/`TCPAccept`.
- -  `net.connect(port, host?, cb?)` → Socket; `.on('data'|'end'|'drain'|'error'|'close')`, `.write`, `.end` (FIN via `shutdown(SHUT_WR)`), `.destroy`.
- -  `dgram.createSocket(type, onMsg?)` / `.bind` / `.send(data, port, host)` / `.on('message',(msg,rinfo))` — UDP over `UDPBind`+`recvfrom`/`sendto`.
- -  `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval`/`setImmediate` — a JS min-heap over the single `pol.timer`. Native leaves: `net._listen/_connect/_accept/_recv/_send/_shutwr/_close`, `dgram._bind/_recv/_send`.
+###  net.cpp — net/dgram + Node timers over pol
+
+A Node-style async API on top of `pol`: native socket leaves return bare fds, the EventEmitter, per-socket `Buf`s, and the timer wheel live in the embedded JS bundle. Contract in [NET.md].
+
+ -  `net.createServer(onConn)`/`server.listen(port,host?,cb?)`/`server.close()` — TCP accept loop over `TCPListen`/`TCPAccept`.
+ -  `net.connect(port,host?,cb?)` → Socket — `.on('data'|'end'|'drain'|'error'|'close')`, `.write`, `.end` (FIN), `.destroy`.
+ -  `dgram.createSocket(type,onMsg?)`/`.bind`/`.send`/`.on('message',...)` — UDP over `UDPBind`+`recvfrom`/`sendto`.
+ -  `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval`/`setImmediate` — a JS min-heap over the single `pol` timer.
+
+###  uri.cpp — abc/URI bindings + the `URI` class
+
+Parse/compose/escape over abc/URI; a URI is small text, so components cross as decoded JS strings (not zero-copy views).
+
+ -  `uri._parse`/`_make`/`_esc`/`_unesc` — leaves: parse into 8 components, compose from parts, percent-escape / unescape.
+ -  `URI` class — `new URI(text)` (`.scheme`/`.host`/`.path`/...), `URI.make(...)`, `URI.escape`/`unescape`, `toString()`.
+
+###  ansi.cpp — ANSI colour helper (pure JS)
+
+SGR escape-code wrappers, no abc/ANSI link; gate on `io.isatty(fd)` to fall back to plain (theme-matched colours use the hunk renderer instead).
+
+ -  `ansi.bold`/`dim`/`italic`/`under`/`rev` — style wrappers, each `s` → `ESC[n m … ESC[0m`.
+ -  `ansi.black`/`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`/`white`/`grey` — colour wrappers; `ansi.reset`, `ansi.sgr(n)`.
+
+###  require.cpp — synchronous CommonJS `require()`
+
+Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`, `io.stat` to probe) — no engine module loader, no promises.
+
+ -  `require(spec)` — resolve → mmap → wrap in a `Function` → eval → cache; inserted BEFORE eval so cycles see partial exports.
+ -  `require.resolve`/`require.cache` — resolution (`.js`/`/index.js`) + the by-abspath cache; each module's `require` is bound to its dir.
 
 ###  main.cpp — context, module install, script runner
 
-`main()` maps `ABC_BASS`, builds the context, installs utf8→io→buf→…→pol→net, exposes the script's argv tail as the globals `args` (tokens after the script path) + Node-ish `process.argv` (`["jabc", script, …tail]`, both via `JABCInstallArgv`, no held refs), runs `--eval`/script (propagating an uncaught exception to the exit code via `JABCRun`), then drains the event loop (`pol.run(pol.NEVER)`, Node-like) before releasing the context BEFORE `FILECloseAll` so GC deallocators run while the FILE subsystem is alive.
+`main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.
+
+ -  module install order — utf8 → io → buf → cont → tok → uri → codec → ansi → pol → net → require.
+ -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jabc", script, ...]`).
+ -  run + drain — `JABCRun` propagates an uncaught exception to the exit code, then `pol.run(pol.NEVER)` drains the loop (Node-like).
+ -  teardown order — release the context BEFORE `FILECloseAll` so GC deallocators (munmap) run while FILE is alive.
 
 ##  Tests
 
- -  `test/jabc_test.cpp` — table-driven C++ harness over utf8/Buf/io + the `ron` time codec (JS-021: `now`/`of`/`date`, links codec.cpp + dog); exits non-zero on any failed row. Build target `jabc_test`, ctest `JABCtestCpp`.
- -  ctest `JABCcodec` — `test/codec.js`: hex/sha vectors, `ron60` round-trips, and the JS-021 `ron.now`/`of`/`date` time codec against the real `jabc` binary.
- -  ctest `JABCtok` — `test/tok.js`: `tok.parse` of a `"js"` snippet (tag/start/end/text/str of known tokens, full-walk count), zero-copy `text()`, unknown/empty lang plain-text fallback, empty → empty, and a >16 MiB source throws. The `out` path: `tok.parse(src,lang,out)` matches the no-out result token-for-token, the returned view is zero-copy over `out` (cursor advanced `n*4`), one `out` Buf is reused across two parses (`reset()` between), and a too-small or unaligned `out` throws.
- -  ctest `JABCe2e` — the `jabc` binary runs an inline Buf+utf8 round-trip; a failed assertion throws → non-zero exit.
- -  ctest `JABCpol` — `test/pol.js`: periodic/one-shot timers, fd readiness (regular-file POLLIN, read-to-EOF drop), `pol.default`, handler-throw propagation, `pol.stop`.
- -  ctest `JABCnet` — `test/net.js`: TCP echo round-trip, a 200 KB multi-chunk transfer, UDP ping/pong, and setTimeout/clearTimeout/setInterval — all in the one implicit loop.
- -  ctest `JABCargv` — `test/run-015.sh`: `jabc script.js a b c` exposes `args` == `["a","b","c"]` and Node-shaped `process.argv`; `--eval` leaves `args` empty.
- -  ctest `JABCindex` — `test/index.js`: the JS-022 `abc.index` LSM (u64 + wh128) — put/flush/compact then assert POINT/RANGE/PREFIX vs a brute-force JS oracle (Set/Map), incl. newest-run-wins shadow, range early-stop, and re-open over an existing run dir.
- -  ctest `JABCpack` — `test/pack.js`: the `git.pack`/`git.delta` surface (JS-024) — offset-addressed pack write/seek/walk + the GIT-007 cross-impl vector (a JABC-written log resolves byte-identically through the dog/git multi-hop OFS_DELTA chase). Asserts the hard cutover too: the global `delt` is gone and `abc.over("PACK")` no longer builds a container.
- -  ctest `JABCpackidx` — `test/packidx.js` (GIT-010): the pack-log index-EMIT — `pack.scan` over a raw+OFS_DELTA+delta² pack drops `(sha→offset)` wh128 entries piped into an `abc.index` wh128 lane, asserting `sha→offset` lookups vs a resolve-and-rehash oracle, and that index-on-append (`pack.feed(…,out)`) yields the same entry set as a full scan.
- -  ctest `JABCweave` — `test/weave.js`: from-blob round-trip (alive == blob), diff fold with scope-classified produce per rev, fork/merge of disjoint edits, the rewind/next token cursor, emitDiff/emitFull into a HUNK container, merged conflict/disjoint framing, and weaveIdHash — mirrors dog/test/WEAVE01.c + WEAVE02.c.
+ -  `test/jabc_test.cpp` — C++ harness over utf8/Buf/io + the `ron` time codec (`jabc_test`, ctest `JABCtestCpp`).
+ -  ctest targets — one `JABC*` per module (`codec`/`tok`/`index`/`pack`/`git`/`weave`/`pol`/`net`/... + family tests), each a `test/*.js` on `jabc`.
  -  `lsan.supp` — suppresses JSC-internal singleton leaks by library name.

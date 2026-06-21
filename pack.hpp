@@ -19,9 +19,54 @@
 #include "cont.hpp"
 
 extern "C" {
+#include "abc/HEX.h"
 #include "dog/git/DELT.h"
+#include "dog/git/GIT.h"
 #include "dog/git/PACK.h"
 #include "dog/git/PIDX.h"
+}
+
+//  A fresh JS string over a u8cs slice's bytes (UTF-8), for commit ident /
+//  body / subject fields.  Embedded NULs survive (explicit length).
+static inline JSValueRef JABCStrOf(JSContextRef ctx, u8cp from, u8cp to) {
+  size_t n = (to > from) ? (size_t)(to - from) : 0;
+  JSStringRef s = JSStringCreateWithUTF8CString("");  // placeholder for empty
+  if (n) {
+    //  build via a NUL-free copy (UTF8 ctor stops at a NUL); use the char ctor.
+    char* buf = (char*)malloc(n + 1);
+    if (!buf) return JSValueMakeUndefined(ctx);
+    memcpy(buf, from, n);
+    buf[n] = 0;
+    JSStringRelease(s);
+    s = JSStringCreateWithUTF8CString(buf);
+    free(buf);
+  }
+  JSValueRef v = JSValueMakeString(ctx, s);
+  JSStringRelease(s);
+  return v;
+}
+
+//  A fresh lowercase-hex JS string over `n` raw bytes (sha shorthand).
+static inline JSValueRef JABCHexOf(JSContextRef ctx, const u8* bin, size_t n) {
+  char* h = (char*)malloc(n * 2 + 1);
+  if (!h) return JSValueMakeUndefined(ctx);
+  u8s hx = {(u8*)h, (u8*)h + n * 2};
+  u8cs b = {(u8*)bin, (u8*)bin + n};
+  HEXu8sFeedSome(hx, b);
+  h[n * 2] = 0;
+  JSStringRef s = JSStringCreateWithUTF8CString(h);
+  free(h);
+  JSValueRef v = JSValueMakeString(ctx, s);
+  JSStringRelease(s);
+  return v;
+}
+
+//  Set object property `name` to value `v` (small helper for record objects).
+static inline void JABCSet(JSContextRef ctx, JSObjectRef o, const char* name,
+                           JSValueRef v) {
+  JSStringRef n = JSStringCreateWithUTF8CString(name);
+  JSObjectSetProperty(ctx, o, n, v, kJSPropertyAttributeNone, NULL);
+  JSStringRelease(n);
 }
 
 //  _pack_header(buf, off, count) -> off+12
@@ -244,7 +289,99 @@ static JABC_FN(JABCpackFeedEmit) {
   return JSValueMakeNumber(ctx, (double)sizeof(wh128));
 }
 
+//  _git_tree_next(bytes, off) -> {mode, nameStart, nameEnd, sha, nextOff} | null
+//  JS-028: ONE pure-marshalling drain of a single tree entry via the dog/git
+//  parser GITu8sDrainTree (tree format `(<mode> <name>\0<20-byte sha>)*`).  The
+//  binding holds nothing: it re-slices the caller's typed array from `off`,
+//  drains one entry, and reports the name span (positions into `bytes`, for a
+//  zero-copy subarray in JS), the parsed octal mode (incl. 0o160000 gitlinks),
+//  the 40-hex sha, and the next read offset.  At end-of-tree -> null (the JS
+//  cursor's .next() returns false).  GITu8sFileSplit peels "<mode> " off the
+//  "<mode> <name>" head so `name` is the bare name span — no JS framing.
+static JABC_FN(JABCgitTreeNext) {
+  if (argc < 2) JABC_THROW("git._tree_next(bytes, off)");
+  u8s c = {};
+  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
+  if (off >= (size_t)$len(c)) return JSValueMakeNull(ctx);
+  u8cs obj = {c[0] + off, c[1]};
+  u8cs file = {}, sha1 = {};
+  u32 mode = 0;
+  ok64 r = GITu8sDrainTree(obj, file, sha1, &mode);
+  if (r == NODATA) return JSValueMakeNull(ctx);
+  if (r != OK) JABC_THROW("git.tree: bad tree entry");
+  //  Split "<mode> <name>" -> bare name span (positions into the source bytes).
+  u8cs name = {};
+  GITu8sFileSplit(file, NULL, name);
+  JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
+  JABCSet(ctx, o, "mode", JSValueMakeNumber(ctx, (double)mode));
+  JABCSet(ctx, o, "nameStart", JSValueMakeNumber(ctx, (double)(size_t)(name[0] - c[0])));
+  JABCSet(ctx, o, "nameEnd", JSValueMakeNumber(ctx, (double)(size_t)(name[1] - c[0])));
+  JABCSet(ctx, o, "sha", JABCHexOf(ctx, sha1[0], GIT_SHA1_LEN));
+  JABCSet(ctx, o, "nextOff", JSValueMakeNumber(ctx, (double)(size_t)(obj[0] - c[0])));
+  return o;
+}
+
+//  _git_parse_commit(bytes) -> {tree, parents[], foster[], author, committer, body}
+//  JS-028: eager — commit objects are small.  Drives the dog/git header
+//  iterator GITu8sDrainCommit directly (the only way to surface parents/foster/
+//  committer/body, which GITu8sParseCommit's git_commit struct doesn't carry),
+//  plus GITu8sCommitTree for the tree sha.  `tree`/`parents`/`foster` are
+//  40-hex strings; `author`/`committer`/`body` are UTF-8 decoded values.  No
+//  manual git framing in JS — every split is a dog/git drain.
+static JABC_FN(JABCgitParseCommit) {
+  if (argc < 1) JABC_THROW("git._parse_commit(bytes)");
+  u8s c = {};
+  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+
+  JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
+
+  //  tree sha (binary -> hex); empty string when absent/malformed.
+  u8cs commit = {c[0], c[1]};
+  u8 tree_sha[GIT_SHA1_LEN] = {};
+  if (GITu8sCommitTree(commit, tree_sha) == OK)
+    JABCSet(ctx, o, "tree", JABCHexOf(ctx, tree_sha, GIT_SHA1_LEN));
+  else
+    JABCSet(ctx, o, "tree", JSValueMakeString(ctx, JSStringCreateWithUTF8CString("")));
+
+  //  Walk the headers: collect parents/foster (hex sha values), pick the last
+  //  author/committer ident lines; the blank line yields the body.
+  JSObjectRef parents = JSObjectMakeArray(ctx, 0, NULL, NULL);
+  JSObjectRef foster = JSObjectMakeArray(ctx, 0, NULL, NULL);
+  JSValueRef author = JSValueMakeUndefined(ctx);
+  JSValueRef committer = JSValueMakeUndefined(ctx);
+  JSValueRef body = JSValueMakeString(ctx, JSStringCreateWithUTF8CString(""));
+  unsigned np = 0, nf = 0;
+
+  u8cs scan = {c[0], c[1]};
+  u8cs field = {}, value = {};
+  while (GITu8sDrainCommit(scan, field, value) == OK) {
+    if (field[0] == field[1]) {  //  blank line -> body is the rest
+      body = JABCStrOf(ctx, value[0], value[1]);
+      break;
+    }
+    JSValueRef hv = JABCStrOf(ctx, value[0], value[1]);
+    if (u8csEq(field, GIT_FIELD_PARENT))
+      JSObjectSetPropertyAtIndex(ctx, parents, np++, hv, NULL);
+    else if (u8csEq(field, GIT_FIELD_FOSTER))
+      JSObjectSetPropertyAtIndex(ctx, foster, nf++, hv, NULL);
+    else if (u8csEq(field, GIT_FIELD_AUTHOR))
+      author = hv;
+    else if (u8csEq(field, GIT_FIELD_COMMITTER))
+      committer = hv;
+  }
+
+  JABCSet(ctx, o, "parents", parents);
+  JABCSet(ctx, o, "foster", foster);
+  JABCSet(ctx, o, "author", author);
+  JABCSet(ctx, o, "committer", committer);
+  JABCSet(ctx, o, "body", body);
+  return o;
+}
+
 static inline void JABCPackInstall(JSObjectRef o) {
+  JABC_API_FN(o, "_git_tree_next", JABCgitTreeNext);
+  JABC_API_FN(o, "_git_parse_commit", JABCgitParseCommit);
   JABC_API_FN(o, "_pack_header", JABCpackHeader);
   JABC_API_FN(o, "_pack_count", JABCpackCount);
   JABC_API_FN(o, "_pack_feed", JABCpackFeed);

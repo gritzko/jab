@@ -19,7 +19,7 @@ extern "C" {
 static const char* JABC_CONT_JS = R"JS(
 (function (g) {
   "use strict";
-  const abc = g.abc, io = g.io;
+  const abc = g.abc, io = g.io, utf8 = g.utf8;
 
   //  lane -> { typed-array ctor, JS elems per slot, pair?, bigint? }
   const LANE = {
@@ -349,7 +349,7 @@ static const char* JABC_CONT_JS = R"JS(
       return hunk;
     };
     //  N-way conflict render into out: groups is an array of side scopes
-    //  ([ours, theirs, ...]); divergent regions framed <<<< |||| >>>>.
+    //  ([ours, theirs, ...]); divergent regions get the standard merge fences.
     P.merged = function (groups, out) {
       out.fed(abc._weave_merged(this, this.buffer.watermark | 0, groups, out.idle()));
       return out;
@@ -473,8 +473,45 @@ static const char* JABC_CONT_JS = R"JS(
       return c;
     },
   };
+  //  git.tree(bytes[, cb]) — JS-028.  A PULL cursor over a git tree blob
+  //  `(<mode> <name>\0<20-byte sha>)*`: ALL cursor state lives in JS (rule #4),
+  //  the native leaf abc._git_tree_next drains exactly ONE entry per call (over
+  //  dog/git GITu8sDrainTree) and reports {mode, nameStart, nameEnd, sha,
+  //  nextOff}.  .next() advances and exposes .mode (octal incl. 0o160000
+  //  gitlinks), .name (zero-copy Uint8Array subarray of the entry name), .str
+  //  (utf8.Decode of .name), .sha (40-hex); false at end.  With a callback,
+  //  drive the cursor in-frame (io.readdir style), one cb(entry) per entry.
+  class GitTree {
+    constructor(bytes) { this._b = bytes; this._off = 0; this._e = null; }
+    next() {
+      const e = abc._git_tree_next(this._b, this._off);
+      if (e === null) { this._e = null; return false; }
+      this._e = e; this._off = e.nextOff; return true;
+    }
+    get mode() { return this._e ? this._e.mode : undefined; }
+    get sha()  { return this._e ? this._e.sha : undefined; }
+    //  zero-copy name span over the SOURCE bytes (positions, not a copy).
+    get name() {
+      return this._e ? this._b.subarray(this._e.nameStart, this._e.nameEnd) : undefined;
+    }
+    get str() { return this._e ? utf8.Decode(this.name) : undefined; }
+  }
+  const gitTree = (bytes, cb) => {
+    const t = new GitTree(bytes);
+    if (cb == null) return t;
+    while (t.next()) cb(t);            // in-frame, never stashed (rule #4)
+    return undefined;
+  };
+
   g.git = {
     pack,
+    tree: gitTree,
+    GitTree,
+    //  parseCommit(bytes) — JS-028.  Eager {tree, parents[], foster[], author,
+    //  committer, body} over dog/git GITu8sDrainCommit + GITu8sCommitTree (no
+    //  manual framing in JS); commit objects are small so eager is fine.  tree /
+    //  parents / foster are 40-hex strings; author/committer/body are strings.
+    parseCommit: (bytes) => abc._git_parse_commit(bytes),
     //  delta.apply(base, delta, out): reconstruct a delta target into out (Buf)
     delta: {
       apply: (base, delta, out) => {

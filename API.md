@@ -338,6 +338,42 @@ indexing is the index layer's job (`abc.index`). The GIT-007 cross-impl vector
 holds: a JABC-written log resolves byte-identically through the dog/git multi-hop
 OFS_DELTA chase (keeper + binding share one pack format).
 
+###  git object parsers (`git.tree` / `git.parseCommit`)
+
+The git tree + commit parsers (JS-028), pure marshalling over `dog/git`'s
+`GITu8sDrainTree` / `GITu8sDrainCommit` / `GITu8sCommitTree` — NO manual git
+framing in JS. `git.tree` is a PULL cursor (state in JS, rule #4); the native
+leaf `abc._git_tree_next(bytes, off)` drains exactly one entry per call.
+
+```js
+let t = git.tree(treeBytes);             // tree blob: (<mode> <name>\0<20B sha>)*
+while (t.next()) {                       // advance; false at end
+  t.mode;   // octal number incl. 0o160000 gitlink / 0o40000 dir / 0o100644 file
+  t.name;   // zero-copy Uint8Array subarray of the entry name (over treeBytes)
+  t.str;    // utf8.Decode(t.name)
+  t.sha;    // 40-hex string
+}
+git.tree(treeBytes, (e) => use(e.mode, e.str, e.sha));  // in-frame cb (readdir style)
+
+let c = git.parseCommit(commitBytes);    // eager (commit objects are small)
+c.tree;       // "<40hex>"          (via GITu8sCommitTree)
+c.parents;    // ["<40hex>", …]     (every `parent` header, in order)
+c.foster;     // ["<40hex>", …]     (beagle `foster` headers)
+c.author;     // "Name <email> ts tz"   c.committer;   // same shape
+c.body;       // message body string (text after the blank line)
+```
+
+`git.tree(bytes)` returns a `GitTree` cursor; `.next()` advances and exposes
+`.mode`/`.name`/`.str`/`.sha`, returning `false` past the last entry (and on an
+empty tree). `.name` is a zero-copy `subarray` of the source bytes (so the cursor
+PINS `bytes`). `git.tree(bytes, cb)` drives the cursor in-frame and calls `cb(t)`
+per entry (the cursor itself is the argument), returning `undefined`. The
+`0o160000` mode is surfaced so submodule gitlinks are detectable downstream.
+`git.parseCommit` walks the header block once (`GITu8sDrainCommit`) collecting
+parents/foster and the author/committer ident lines, reads the tree sha via
+`GITu8sCommitTree`, and returns the message body — all hex shas as lowercase
+40-char strings.
+
 ##  tok — generic source tokenizer
 
 ```js
