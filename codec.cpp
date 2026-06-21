@@ -4,8 +4,10 @@ extern "C" {
 #include "abc/HEX.h"
 #include "abc/RON.h"
 #include "abc/SHA.h"
+#include "dog/DOG.h"      //  DOGutf8sFeedDate (relative-date formatter, JS-021)
 #include "dog/git/SHA1.h"
 }
+#include <time.h>
 
 //  hex + sha: pure byte transforms (no state).  hex mirrors utf8 (a string on
 //  the text side, bytes on the binary side); sha1/sha256 hash bytes -> the
@@ -124,15 +126,86 @@ static JABC_FN(JABCronDecode) {
   return JSBigIntCreateWithUInt64(ctx, (uint64_t)v, exception);
 }
 
+//  ron time interpretation (JS-021): ron60 IS the ULOG `ts` encoding.  Three
+//  thin leaves; the Date-coerce + BigInt sugar lives in JS (JABC_RON_JS).
+//  ron60 crosses as BigInt, like ron.encode/decode.
+
+//  ron._now() -> current ron60 (BigInt), localtime-aligned ms (RONNow).
+static JABC_FN(JABCronNow) {
+  (void)argc; (void)args;
+  return JSBigIntCreateWithUInt64(ctx, (uint64_t)RONNow(), exception);
+}
+
+//  ron._ofMs(ms) -> ron60 (BigInt) for a ms-epoch int.  localtime split +
+//  RONOfTime, matching RONNow's wall-clock alignment.
+static JABC_FN(JABCronOfMs) {
+  if (argc < 1) JABC_THROW("ron._ofMs(ms)");
+  double msd = JSValueToNumber(ctx, args[0], exception);
+  if (*exception) return JSValueMakeUndefined(ctx);
+  i64 msi = (i64)msd;
+  time_t sec = (time_t)(msi / 1000);
+  u32 ms = (u32)(((msi % 1000) + 1000) % 1000);  //  floor-mod for pre-epoch
+  struct tm tm = {};
+  localtime_r(&sec, &tm);
+  ron60 r = 0;
+  if (RONOfTime(&r, &tm, ms) != OK) JABC_THROW("ron._ofMs: out of range");
+  return JSBigIntCreateWithUInt64(ctx, (uint64_t)r, exception);
+}
+
+//  ron._date(ron60) -> relative-date string.  RONToTime -> mktime -> unix
+//  secs, now=time(NULL), DOGutf8sFeedDate (the be-log "12:34"/"Tue05" format).
+static JABC_FN(JABCronDate) {
+  if (argc < 1) JABC_THROW("ron._date(BigInt)");
+  uint64_t v = JSValueToUInt64(ctx, args[0], exception);
+  if (*exception) return JSValueMakeUndefined(ctx);
+  i64 secs = 0;
+  if (v != 0) {
+    struct tm tm = {};
+    if (RONToTime((ron60)v, &tm, NULL) != OK) JABC_THROW("ron._date: bad ron60");
+    tm.tm_isdst = -1;                 //  let mktime resolve DST (cf. SNIFF)
+    time_t s = mktime(&tm);
+    secs = (s == (time_t)-1) ? 0 : (i64)s;
+  }
+  u8 b[16];
+  u8s into = {b, b + sizeof(b)};
+  if (DOGutf8sFeedDate(into, secs, (i64)time(NULL)) != OK)
+    JABC_THROW("ron._date: format failed");
+  size_t n = (size_t)(into[0] - b);
+  char tmp[17];
+  if (n > 16) n = 16;
+  memcpy(tmp, b, n);
+  tmp[n] = 0;
+  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
+  JSValueRef r = JSValueMakeString(ctx, js);
+  JSStringRelease(js);
+  return r;
+}
+
+//  JS sugar: now() binds the leaf; of() coerces Date->getTime(); date()
+//  coerces to BigInt.  No held JS refs (JABC rule #4).
+static const char* JABC_RON_JS = R"JS(
+(function (g) {
+  "use strict";
+  const ron = g.ron;
+  ron.now = () => ron._now();
+  ron.of = x => ron._ofMs(x instanceof Date ? x.getTime() : Number(x));
+  ron.date = r => ron._date(BigInt(r));
+})(this);
+)JS";
+
 ok64 JABCCodecInstall() {
   JABC_API_OBJECT(ron);
   JABC_API_FN(ron, "encode", JABCronEncode);
   JABC_API_FN(ron, "decode", JABCronDecode);
+  JABC_API_FN(ron, "_now", JABCronNow);    //  ron.now/of/date sugar: JABC_RON_JS
+  JABC_API_FN(ron, "_ofMs", JABCronOfMs);
+  JABC_API_FN(ron, "_date", JABCronDate);
   JABC_API_OBJECT(hex);
   JABC_API_FN(hex, "encode", JABChexEncode);
   JABC_API_FN(hex, "encodeInto", JABChexEncodeInto);
   JABC_API_FN(hex, "decode", JABChexDecode);
   JABC_API_FN(JABC_GLOBAL_OBJECT, "sha1", JABCsha1);
   JABC_API_FN(JABC_GLOBAL_OBJECT, "sha256", JABCsha256);
+  JABCExecute(JABC_RON_JS);
   return OK;
 }

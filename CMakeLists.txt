@@ -37,8 +37,8 @@ target_link_libraries(jabc ${JSC_LIB} dog abc-core ${sodium})
 
 # Table-driven C++ harness over the buf/utf8/io boundary; returns non-zero on
 # any failed row, so CTest fails on a real bug (CLAUDE.md §3).
-add_executable(jabc_test test/jabc_test.cpp io.cpp utf8.cpp buf.cpp)
-target_link_libraries(jabc_test ${JSC_LIB} abc)
+add_executable(jabc_test test/jabc_test.cpp io.cpp utf8.cpp buf.cpp codec.cpp)
+target_link_libraries(jabc_test ${JSC_LIB} dog abc)
 
 add_test(NAME JABCtestCpp COMMAND jabc_test)
 

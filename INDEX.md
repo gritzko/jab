@@ -38,6 +38,10 @@ Per-(family,lane) JS prototypes bound once to native leaves, plus the mmap const
  -  `pack.hpp` — PACK binding (GIT-007), pure marshalling over the dog/git pack core: `_feed`→`PACKu8sFeedObj` (raw|OFS_DELTA decided there), `_resolve`→`PACKResolveOfs`, `_next`→`PACKRecordEnd`; sha→offset index + base resolution stay in JS.
  -  `weave.hpp` — WEAVE binding over dog/WEAVE: a WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call. `fold`→`WEAVENext`, `merge`→`WEAVEMerge` rewrite the whole blob; `alive`/`produce`→`WEAVEAlive`/`WEAVEProduce`, `scope`→`WEAVEScope`, the `rewind`/`next` cursor→`WEAVEStep`. `emitDiff`/`emitFull`→`WEAVEEmitDiff`/`WEAVEEmitFull` append diff `'H'` records (toks carry the per-token side) into a HUNK container read by the HUNK cursor — the C callback IS the sink (rule #4, no JS closure); `merged`→`WEAVEEmitMerged` renders an N-side merge into a Buf, framing conflicts `<<<< |||| >>>>`. Commit ids cross as 16-char hex hashlet strings (hi64 of the commit sha1); all u64↔hex lives in the leaf.
 
+###  codec.cpp — byte transforms + `ron60` codec (hex / sha / ron)
+
+Pure stateless transforms, no held refs. `hex.encode/decode/encodeInto` (abc/HEX), `sha1`/`sha256` (dog/git SHA1 + abc/SHA) → the sha lane. `ron.encode/decode` cross `ron60`↔BigInt (RON base64). `ron` time codec (JS-021) interprets a `ron60` as a ULOG `ts`: native leaves `_now`→`RONNow`, `_ofMs(ms)`→`localtime`+`RONOfTime`, `_date(ron60)`→`RONToTime`+`mktime`+`DOGutf8sFeedDate`; the embedded `JABC_RON_JS` adds `ron.now()` (BigInt), `ron.of(Date|ms)` (Date→`getTime()`), `ron.date(r)`→relative string (`be log` "12:34"/"Tue05" form). All localtime-aligned like `RONNow`; `ron60` only spans 2000-2099 (`RONOfTime` throws out of range).
+
 ###  pol.cpp — `pol` event loop over abc/POL (one trampoline, JS owns the table)
 
 The `poll(2)` loop binds `abc/POL` keeping JABC rule #4: C holds NO per-fd JS closures. The `fd→handler` table + wrappers live in an embedded JS bundle (like `Buf`); C holds only two protected router refs (`pol._fd`/`pol._timer`) and routes every ready fd / timer tick through them. `pol` carries readiness; handlers do their own `io.*` I/O. v1 = one timer (POL keys timers by C callback pointer). API + contract in [POL.md].
@@ -62,7 +66,8 @@ Node-style async API on top of `pol`: native socket leaves return bare fds (EAGA
 
 ##  Tests
 
- -  `test/jabc_test.cpp` — table-driven C++ harness over utf8/Buf/io (in-memory rows + pipe + mmap round-trips); exits non-zero on any failed row. Build target `jabc_test`, ctest `JABCtestCpp`.
+ -  `test/jabc_test.cpp` — table-driven C++ harness over utf8/Buf/io + the `ron` time codec (JS-021: `now`/`of`/`date`, links codec.cpp + dog); exits non-zero on any failed row. Build target `jabc_test`, ctest `JABCtestCpp`.
+ -  ctest `JABCcodec` — `test/codec.js`: hex/sha vectors, `ron60` round-trips, and the JS-021 `ron.now`/`of`/`date` time codec against the real `jabc` binary.
  -  ctest `JABCe2e` — the `jabc` binary runs an inline Buf+utf8 round-trip; a failed assertion throws → non-zero exit.
  -  ctest `JABCpol` — `test/pol.js`: periodic/one-shot timers, fd readiness (regular-file POLLIN, read-to-EOF drop), `pol.default`, handler-throw propagation, `pol.stop`.
  -  ctest `JABCnet` — `test/net.js`: TCP echo round-trip, a 200 KB multi-chunk transfer, UDP ping/pong, and setTimeout/clearTimeout/setInterval — all in the one implicit loop.

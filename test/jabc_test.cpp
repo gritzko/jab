@@ -139,9 +139,26 @@ int main() {
   JABCutf8Install();
   JABCioInstall();
   JABCbufInstall();
+  JABCCodecInstall();  //  JS-021: ron.now/of/date over the time leaves
 
   for (size_t i = 0; i < sizeof(ROWS) / sizeof(ROWS[0]); i++)
     check(ROWS[i].name, ROWS[i].js);
+
+  //  JS-021 ron time codec: now() is a BigInt; of(Date)===of(ms-int);
+  //  date(now()) is non-empty; date(0n) is the fixed "?" placeholder
+  //  (ts<=0, centre-padded to 7 cols by DOGutf8sFeedDate).
+  check("ron_now_bigint", "typeof ron.now()==='bigint'");
+  //  1700000000000 ms = 2023-11-14, inside ron60's 2000-2099 YY range.
+  check("ron_of_date_eq_ms",
+        "ron.of(new Date(1700000000000))===ron.of(1700000000000)");
+  check("ron_date_nonempty",
+        "(()=>{let s=ron.date(ron.now());return typeof s==='string'&&s.trim().length>0})()");
+  check("ron_date_zero_placeholder", "ron.date(0n)==='   ?   '");
+  //  of(now-ms) then date() lands in the HH:MM bucket (same minute, <12h):
+  //  trimmed to 5 chars "HH:MM" with a ':' at index 2.
+  check("ron_date_now_hhmm",
+        "(()=>{let s=ron.date(ron.of(Date.now())).trim();"
+        "return s.length===5&&s[2]===':'})()");
 
   //  fd round-trip over a pipe: write a Buf's DATA, read it back into a Buf.
   int fds[2];

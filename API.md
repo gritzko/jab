@@ -237,6 +237,21 @@ utf8.Decode(u8);             // validate UTF-8, → JS string; throws on malform
 > U+10FFFF (via ABC `utf8sValid`/`utf8sDrain32`); it is not JSC's lenient
 `JSStringCreateWithUTF8CString`.
 
+##  ron — `ron60` time codec
+
+```js
+ron.encode(bigint);   // ron60 → RON base64 string   ron.decode(str) → BigInt
+ron.now();            // current ron60 (BigInt), localtime-aligned ms (RONNow)
+ron.of(Date|ms);      // a JS Date or ms-epoch int → ron60 (BigInt)
+ron.date(ron60);      // → relative-date string: "12:34" / "Tue05" / "01Jan25"
+```
+
+`ron60` is the ULOG `ts` encoding; it crosses as a `BigInt`. `now`/`of` align
+to the wall clock like `RONNow` (localtime), and only span **2000-2099** —
+`ron.of` of an out-of-range instant throws. `ron.date` renders the same
+relative form `be log`/`be status` use (`DOGutf8sFeedDate`), centre-padded to
+7 columns; `ron.date(0n)` is the `"?"` placeholder.
+
 ##  script args
 
 ```js
@@ -300,3 +315,5 @@ k.msync();
 | `io.book`                 | `FILEBookCreate`                       |
 | `b.msync` / `trim`        | `FILEMSync` / `FILETrimMap`            |
 | `io.ram`                  | `u8bMap` (anonymous)                   |
+| `ron.now` / `of`          | `RONNow` / `localtime`+`RONOfTime`     |
+| `ron.date`                | `RONToTime`+`mktime`+`DOGutf8sFeedDate`|

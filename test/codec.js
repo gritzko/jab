@@ -50,4 +50,19 @@ function eq(a, b, m) { if (a !== b) fail(m + ": " + a + " !== " + b); }
     eq(ron.encode(ron.decode(s)), s, "ron roundtrip " + s);
 }
 
+// JS-021 ron time codec: now()/of()/date() over RONNow/RONOfTime/DOGutf8sFeedDate.
+{
+  if (typeof ron.now() !== "bigint") fail("ron.now not bigint");
+  // of(Date) === of(ms-int): same instant, two arg shapes.
+  // 1700000000000 ms = 2023-11-14, inside ron60's 2000-2099 YY range.
+  eq(ron.of(new Date(1700000000000)), ron.of(1700000000000), "ron.of Date vs ms");
+  // date() is a non-empty (7-col centred) string; date(0n) is the "?" placeholder.
+  const d = ron.date(ron.now());
+  if (typeof d !== "string" || d.trim().length === 0) fail("ron.date empty");
+  eq(ron.date(0n), "   ?   ", "ron.date(0) placeholder");
+  // of(now-ms) -> date() lands in the HH:MM bucket (same minute, <12h).
+  const hhmm = ron.date(ron.of(Date.now())).trim();
+  if (hhmm.length !== 5 || hhmm[2] !== ":") fail("ron.date HH:MM: " + hhmm);
+}
+
 io.log("codec.js OK");
