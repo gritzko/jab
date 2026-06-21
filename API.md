@@ -140,8 +140,7 @@ io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"recur" directive
 let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepScanDir)
 let h = io.readdir("dir", {hidden:true});       // → incl. dotfiles ('.x')
 io.readdir("dir", {recursive:true, callback:n=>{}}); // cb across the subtree
-let {pid, stdin, stdout} = io.spawn("/bin/cat", ["cat"]); // fds    (FILESpawn)
-let n = io.reap(pid);             // wait, → exit code              (FILEReap)
+io.unlink("tmp");                 // remove a name                  (FILEUnLink)
 let dir = io.cwd();               // process working directory      (FILEGetCwd)
 let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
@@ -175,6 +174,55 @@ io.writev(fd, [a, b]);  // scatter (writev)                                  (FI
 io.read(fd, b);         // one read into IDLE; advances idle head            (FILEDrain→u8bFed)
 io.readAll(fd, b);      // read until IDLE full or EOF                       (FILEdrainall)
 io.readv(fd, [a, b]);   // gather (readv)                                    (FILEdrainv)
+```
+
+##  processes (spawn / reap)
+
+Run a child process. The three native leaves are pure marshalling over
+`FILESpawn`/`FILESpawnFds`/`FILEReap`; `argv` is a JS `string[]` (`argv[0]` is
+the program name the child sees), `path` is resolved by `execvp` (an absolute
+path is used as-is; a bare name triggers a `PATH` lookup). No shell. fds and
+the pid cross as plain `number`s — you own and close every fd, and you reap the
+pid yourself (the binding never reaps on GC).
+
+```js
+let {pid, stdin, stdout} = io.spawn("/bin/cat", ["cat"]);   // pipe fds   (FILESpawn)
+//   stdin  = a WRITE fd to the child's stdin
+//   stdout = a READ  fd from the child's stdout
+//   stderr is INHERITED from the parent (goes to the parent's stderr)
+
+let pid = io.spawnFds("/bin/cat", ["cat"], inFd, outFd);    // caller fds  (FILESpawnFds)
+//   inFd / outFd become the child's stdin / stdout; `-1` inherits.
+//   The child dups them; the caller still owns + closes them.
+
+let r = io.reap(pid);   // wait for the child                              (FILEReap)
+//   clean exit (any status)  → { code }    (e.g. {code:0}, {code:3})
+//   killed by a signal       → { signal }  (e.g. {signal:9})
+//   EXACTLY ONE key is set.  Any other failure throws.
+```
+
+**Pipe deadlock caveat.** A `spawn` stdout pipe holds ~64 KB. If the child
+writes more than that before you drain `stdout`, it blocks — and if you reap
+before draining, both sides hang. So drain the pipe to EOF *before* reaping:
+
+```js
+// Capture stdout into a growable Buf (single pipe → no deadlock).
+let p = io.spawn("/usr/bin/git", ["git", "log", "--oneline"]);
+io.close(p.stdin);                       // child reads no input
+let b = io.ram(1 << 20);
+while (io.read(p.stdout, b) > 0) {}       // drain to EOF (grows as needed)
+io.close(p.stdout);
+let {code} = io.reap(p.pid);              // b.data() = stdout
+```
+
+For a large output, sink stdout to a file and `mmap` it back zero-copy instead
+(no pipe, no drain loop); `unlink` after the map and the inode auto-cleans on GC:
+
+```js
+let fd = io.open("/tmp/out", "c");
+let pid = io.spawnFds("/usr/bin/git", ["git", "log"], -1, fd);  // stdout → file
+io.close(fd); let {code} = io.reap(pid);
+let out = io.mmap("/tmp/out", "r"); io.unlink("/tmp/out");      // zero-copy Buf
 ```
 
 ##  text
@@ -246,6 +294,9 @@ k.msync();
 | `io.read*`                | `FILEDrain` / `FILEdrainall` / `FILEdrainv` |
 | `io.write*`               | `FILEFeed` / `FILEFeedAll` / `FILEFeedv`    |
 | `io.mmap` `r`/`rw`/`c`    | `FILEMapRO` / `FILEMapRW` / `FILEMapCreate`  |
+| `io.spawn` / `spawnFds`   | `FILESpawn` / `FILESpawnFds`           |
+| `io.reap`                 | `FILEReap` (`{code}` / `{signal}`)     |
+| `io.unlink`               | `FILEUnLink`                           |
 | `io.book`                 | `FILEBookCreate`                       |
 | `b.msync` / `trim`        | `FILEMSync` / `FILETrimMap`            |
 | `io.ram`                  | `u8bMap` (anonymous)                   |

@@ -548,6 +548,144 @@ static JABC_FN(JABCioGetenv) {
   return JABCSliceStr(ctx, val);
 }
 
+//  io.unlink(path) -> remove a name from the filesystem (over FILEUnLink).  Pure
+//  marshalling.  (A file mmap'd before unlink stays valid: the inode lives on
+//  while mapped, so the page-cache Buf auto-cleans when GC'd — see API.md.)
+static JABC_FN(JABCioUnlink) {
+  if (argc < 1) JABC_THROW("io.unlink(path)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.unlink(): bad path");
+  }
+  if (FILEUnLink($path(path)) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
+//  . . . . . . . . process spawn + reap (JS-020) . . . . . . . .
+//
+//  argv is a JS string[] -> a u8css (slice of u8cs) over per-call STACK
+//  scratch: each element's UTF-8 bytes land NUL-terminated in `bytes`, and the
+//  matching {head, term} pair (term BEFORE the NUL) goes into `slots`.  Mirrors
+//  the WIRECLI.c / dog/HOME.c argv idiom (a `u8cs argv_arr[]` + `u8css argv =
+//  {arr, arr+n}`).  FILESpawn re-copies argv internally for execv, so the
+//  scratch only has to live across the spawn call.  No held JS ref (rule #4);
+//  fds + pid cross the boundary as plain numbers.
+#define JABC_ARGV_MAX 256       //  argv element cap (stack slot array)
+#define JABC_ARGV_BYTES 65536   //  total argv UTF-8 byte cap (stack scratch)
+
+//  Fill `slots`/`bytes`/`*n` from a JS array argument; returns OK or a code.
+//  `slots` is a u8cs[JABC_ARGV_MAX]; `bytes` a u8b over JABC_ARGV_BYTES scratch.
+static ok64 JABCBuildArgv(u8cs* slots, size_t* n, path8b bytes, JSContextRef ctx,
+                          JSValueRef arg, JSValueRef* exception) {
+  if (!JSValueIsArray(ctx, arg)) return BADARG;
+  JSObjectRef arr = (JSObjectRef)arg;
+  JSStringRef lk = JSStringCreateWithUTF8CString("length");
+  double len = JSValueToNumber(ctx, JSObjectGetProperty(ctx, arr, lk, NULL), NULL);
+  JSStringRelease(lk);
+  if (len < 1) return BADARG;  //  argv[0] (program name) is mandatory
+  if (len > JABC_ARGV_MAX) return NOROOM;
+  size_t cnt = (size_t)len;
+  for (size_t i = 0; i < cnt; i++) {
+    JSValueRef ev = JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);
+    if (*exception || !JSValueIsString(ctx, ev)) return BADARG;
+    JSStringRef s = JSValueToStringCopy(ctx, ev, exception);
+    if (*exception || s == NULL) return BADARG;
+    //  Copy into the shared scratch buffer's IDLE; record the slice (sans NUL).
+    u8* head = u8bIdleHead(bytes);
+    size_t room = (size_t)u8bIdleLen(bytes);
+    size_t got = JSStringGetUTF8CString(s, (char*)head, room);  //  got counts NUL
+    JSStringRelease(s);
+    if (got < 1 || got >= room) return NOROOM;
+    u8cs slot = {head, head + (got - 1)};
+    u8csMv(slots[i], slot);
+    //  Park the copied bytes + NUL in PAST so the next element gets fresh IDLE.
+    u8bFed(bytes, got);
+    u8bUsed(bytes, got);
+  }
+  *n = cnt;
+  return OK;
+}
+
+//  Set a numeric property on an object (small helper for the result records).
+static void JABCSetNum(JSContextRef ctx, JSObjectRef o, const char* k, double v) {
+  JSStringRef ks = JSStringCreateWithUTF8CString(k);
+  JSObjectSetProperty(ctx, o, ks, JSValueMakeNumber(ctx, v),
+                      kJSPropertyAttributeNone, NULL);
+  JSStringRelease(ks);
+}
+
+//  io.spawn(path, argv) -> {pid, stdin, stdout}.  Creates pipes for the child's
+//  stdin (write fd) and stdout (read fd); stderr is INHERITED from the parent.
+//  The caller owns + closes both fds and reaps the pid via io.reap.
+static JABC_FN(JABCioSpawn) {
+  if (argc < 2) JABC_THROW("io.spawn(path, argv) -> {pid, stdin, stdout}");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.spawn(): bad path");
+  }
+  a_pad(u8, bytes, JABC_ARGV_BYTES);
+  u8cs slots[JABC_ARGV_MAX];
+  size_t nargs = 0;
+  if (JABCBuildArgv(slots, &nargs, bytes, ctx, args[1], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.spawn(): argv must be a non-empty string[]");
+  }
+  u8css argv = {slots, slots + nargs};
+  u8csc binpath = {$path(path)[0], $path(path)[1]};
+  int wfd = -1, rfd = -1;
+  pid_t pid = 0;
+  if (FILESpawn(binpath, argv, &wfd, &rfd, &pid) != OK)
+    JABC_THROW(strerror(errno));
+  JSObjectRef obj = JSObjectMake(ctx, NULL, NULL);
+  JABCSetNum(ctx, obj, "pid", (double)pid);
+  JABCSetNum(ctx, obj, "stdin", (double)wfd);
+  JABCSetNum(ctx, obj, "stdout", (double)rfd);
+  return obj;
+}
+
+//  io.spawnFds(path, argv, inFd, outFd) -> pid.  The child dups the supplied
+//  fds (`-1` inherits the parent's); the caller still owns + closes them.
+static JABC_FN(JABCioSpawnFds) {
+  if (argc < 2) JABC_THROW("io.spawnFds(path, argv, inFd, outFd) -> pid");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.spawnFds(): bad path");
+  }
+  a_pad(u8, bytes, JABC_ARGV_BYTES);
+  u8cs slots[JABC_ARGV_MAX];
+  size_t nargs = 0;
+  if (JABCBuildArgv(slots, &nargs, bytes, ctx, args[1], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.spawnFds(): argv must be a non-empty string[]");
+  }
+  u8css argv = {slots, slots + nargs};
+  int inFd = argc > 2 ? JABCInt(ctx, args[2], exception) : -1;
+  int outFd = argc > 3 ? JABCInt(ctx, args[3], exception) : -1;
+  if (*exception) return JSValueMakeUndefined(ctx);
+  u8csc binpath = {$path(path)[0], $path(path)[1]};
+  pid_t pid = 0;
+  if (FILESpawnFds(binpath, argv, inFd, outFd, &pid) != OK)
+    JABC_THROW(strerror(errno));
+  return JSValueMakeNumber(ctx, (double)pid);
+}
+
+//  io.reap(pid) -> {code} on a clean exit (any status), {signal} on a signal
+//  death (FILESIGNAL).  Exactly one key is set.  Any other non-OK throws.
+static JABC_FN(JABCioReap) {
+  if (argc < 1) JABC_THROW("io.reap(pid) -> {code}|{signal}");
+  int pid = JABCInt(ctx, args[0], exception);
+  if (*exception) return JSValueMakeUndefined(ctx);
+  int rc = -1;
+  ok64 o = FILEReap((pid_t)pid, &rc);
+  if (o != OK && o != FILESIGNAL) JABC_THROW(strerror(errno));
+  JSObjectRef obj = JSObjectMake(ctx, NULL, NULL);
+  JABCSetNum(ctx, obj, o == FILESIGNAL ? "signal" : "code", (double)rc);
+  return obj;
+}
+
 //  io.isatty(fd) -> bool  (is the fd a terminal? — the color-vs-plain gate)
 static JABC_FN(JABCioIsatty) {
   if (argc < 1) JABC_THROW("io.isatty(fd)");
@@ -605,6 +743,10 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "_ram", JABCioRam);
   JABC_API_FN(io, "_msync", JABCioMsync);
   JABC_API_FN(io, "_truncate", JABCioTruncate);
+  JABC_API_FN(io, "unlink", JABCioUnlink);
+  JABC_API_FN(io, "spawn", JABCioSpawn);
+  JABC_API_FN(io, "spawnFds", JABCioSpawnFds);
+  JABC_API_FN(io, "reap", JABCioReap);
   JABC_API_FN(io, "isatty", JABCioIsatty);
   JABC_API_FN(io, "cwd", JABCioCwd);
   JABC_API_FN(io, "getenv", JABCioGetenv);

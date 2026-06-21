@@ -23,6 +23,8 @@ JABC is a thin, anti-bloat JavaScriptCore binding: stock `libjavascriptcore`, th
  -  `io._ram` — anonymous `MAP_NORESERVE` mmap → `Uint8Array`, `munmap` on GC (`JABCRamFree`).
  -  `io._msync` — flush a mapped typed array's pages (raw `msync`, no descriptor lookup).
  -  `io.cwd`/`io.getenv` — process cwd (`FILEGetCwd`) / env var (`FILEGetEnv`, `undefined` if unset); pure marshalling, no held ref.
+ -  `io.unlink` — remove a name from the filesystem (`FILEUnLink`); pure marshalling.
+ -  `io.spawn`/`spawnFds`/`reap` — process leaves (JS-020), pure marshalling over `FILESpawn`/`FILESpawnFds`/`FILEReap`. argv (a JS `string[]`) → a `u8css` over per-call STACK scratch (NUL-terminated bytes parked in PAST per element); `path` → `JABCPath` (NUL-termed `path8b`). `io.spawn(path,argv)`→`{pid,stdin,stdout}` (pipe fds; stderr INHERITED); `io.spawnFds(path,argv,inFd,outFd)`→`pid` (`-1`=inherit); `io.reap(pid)`→`{code}` on clean exit (any status) or `{signal}` on `FILESIGNAL` (exactly one key). fds + pid cross as numbers; caller owns + closes every fd; no held JS ref, no reap-on-GC (rule #4).
  -  `io.log` — write strings / typed arrays to stderr.
 
 ###  buf.cpp — the `Buf` cursor class + constructors (embedded JS)

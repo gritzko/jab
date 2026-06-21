@@ -274,6 +274,40 @@ int main() {
     rmdir(dir);
   }
 
+  //  JS-020: process spawn + reap.  spawn pipes the child's stdout back as a
+  //  fd; reap surfaces a clean exit as {code} and a signal death as {signal}.
+  //  Bin paths are resolved via execvp's PATH lookup.
+  check("spawn_echo_stdout",
+        "(()=>{let p=io.spawn('/bin/echo',['echo','hi']);"
+        "let b=io.buf(64);io.read(p.stdout,b);io.close(p.stdout);"
+        "if(p.stdin!==undefined)io.close(p.stdin);"  //  no stdin pipe requested
+        "let r=io.reap(p.pid);"
+        "return r.code===0&&utf8.Decode(b.data())==='hi\\n'})()");
+  check("spawn_stdin_roundtrip",
+        "(()=>{let p=io.spawn('/bin/cat',['cat']);"
+        "let w=io.buf(32);w.feedStr('echo back\\n');io.writeAll(p.stdin,w);"
+        "io.close(p.stdin);"  //  EOF for cat
+        "let b=io.buf(64);io.read(p.stdout,b);io.close(p.stdout);"
+        "let r=io.reap(p.pid);"
+        "return r.code===0&&utf8.Decode(b.data())==='echo back\\n'})()");
+  check("reap_nonzero_code",
+        "(()=>{let p=io.spawn('/bin/sh',['sh','-c','exit 3']);"
+        "io.close(p.stdout);io.close(p.stdin);"
+        "let r=io.reap(p.pid);"
+        "return r.code===3&&r.signal===undefined})()");
+  check("reap_signal_death",
+        "(()=>{let p=io.spawn('/bin/sh',['sh','-c','kill -9 $$']);"
+        "io.close(p.stdout);io.close(p.stdin);"
+        "let r=io.reap(p.pid);"
+        "return r.signal===9&&r.code===undefined})()");
+  check("spawnfds_inherit",
+        "(()=>{let pid=io.spawnFds('/bin/sh',['sh','-c','exit 7'],-1,-1);"
+        "let r=io.reap(pid);return r.code===7})()");
+  check("spawn_argv_not_array_throws",
+        "(()=>{try{io.spawn('/bin/echo','notarray');return false}catch(e){return true}})()");
+  check("spawn_argv_empty_throws",
+        "(()=>{try{io.spawn('/bin/echo',[]);return false}catch(e){return true}})()");
+
   //  JS-017: io.getenv(name) -> string|undefined ; io.cwd() -> string.
   //  A set var reads back; an unset var is undefined; cwd matches getcwd().
   check("getenv_set", "io.getenv('JABC017_VAR')==='hello-017'");
