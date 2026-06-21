@@ -54,7 +54,7 @@ Node-style async API on top of `pol`: native socket leaves return bare fds (EAGA
 
 ###  main.cpp — context, module install, script runner
 
-`main()` maps `ABC_BASS`, builds the context, installs utf8→io→buf→…→pol→net, runs `--eval`/script (propagating an uncaught exception to the exit code via `JABCRun`), then drains the event loop (`pol.run(pol.NEVER)`, Node-like) before releasing the context BEFORE `FILECloseAll` so GC deallocators run while the FILE subsystem is alive.
+`main()` maps `ABC_BASS`, builds the context, installs utf8→io→buf→…→pol→net, exposes the script's argv tail as the globals `args` (tokens after the script path) + Node-ish `process.argv` (`["jabc", script, …tail]`, both via `JABCInstallArgv`, no held refs), runs `--eval`/script (propagating an uncaught exception to the exit code via `JABCRun`), then drains the event loop (`pol.run(pol.NEVER)`, Node-like) before releasing the context BEFORE `FILECloseAll` so GC deallocators run while the FILE subsystem is alive.
 
 ##  Tests
 
@@ -62,6 +62,7 @@ Node-style async API on top of `pol`: native socket leaves return bare fds (EAGA
  -  ctest `JABCe2e` — the `jabc` binary runs an inline Buf+utf8 round-trip; a failed assertion throws → non-zero exit.
  -  ctest `JABCpol` — `test/pol.js`: periodic/one-shot timers, fd readiness (regular-file POLLIN, read-to-EOF drop), `pol.default`, handler-throw propagation, `pol.stop`.
  -  ctest `JABCnet` — `test/net.js`: TCP echo round-trip, a 200 KB multi-chunk transfer, UDP ping/pong, and setTimeout/clearTimeout/setInterval — all in the one implicit loop.
+ -  ctest `JABCargv` — `test/run-015.sh`: `jabc script.js a b c` exposes `args` == `["a","b","c"]` and Node-shaped `process.argv`; `--eval` leaves `args` empty.
  -  ctest `JABCpack` — `test/pack.js`: offset-addressed pack write/seek/walk + the GIT-007 cross-impl vector (a JABC-written log resolves byte-identically through the dog/git multi-hop OFS_DELTA chase).
  -  ctest `JABCweave` — `test/weave.js`: from-blob round-trip (alive == blob), diff fold with scope-classified produce per rev, fork/merge of disjoint edits, the rewind/next token cursor, emitDiff/emitFull into a HUNK container, merged conflict/disjoint framing, and weaveIdHash — mirrors dog/test/WEAVE01.c + WEAVE02.c.
  -  `lsan.supp` — suppresses JSC-internal singleton leaks by library name.

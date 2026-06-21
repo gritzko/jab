@@ -168,6 +168,17 @@ utf8.Decode(u8);             // validate UTF-8, → JS string; throws on malform
 > U+10FFFF (via ABC `utf8sValid`/`utf8sDrain32`); it is not JSC's lenient
 `JSStringCreateWithUTF8CString`.
 
+##  script args
+
+```js
+args;          // the argv tail after the script path: jabc t.js a b → ["a","b"]
+process.argv;  // Node-shaped: ["jabc", <script path>, ...args]
+```
+
+Both globals are installed before the script runs; under `--eval` (no script
+file) `args` is empty. They are plain JS-owned strings — the binding keeps no
+reference after bootstrap.
+
 ##  Examples
 
 ```js
