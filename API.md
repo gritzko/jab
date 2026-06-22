@@ -134,7 +134,11 @@ io.sync(fd);                      // fsync                          (FILESync)
 io.size(fd);                      // → number                      (FILESize)
 io.resize(fd, n);                                                   // (FILEResize)
 io.lock(fd, true); io.unlock(fd); // flock LOCK_EX / LOCK_UN        (FILELock)
-let st = io.stat("data");         // {size, mtime, mode, kind}     (FILEStat)
+let st = io.stat("data");         // {size,mode,kind,mtime,atime}  (FILEStat)
+let ls = io.lstat("link");        // same shape, no symlink follow (FILELStat)
+io.symlink("data", "link");       // create a symlink → target     (FILESymLink)
+let tg = io.readlink("link");     // → target string               (FILEReadLink)
+io.chmod("data", 0o755);          // set POSIX perm bits           (FILEChmod)
 let ns = io.readdir("dir");       // → string[], dirs marked "x/"  (FILEScanDir)
 io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"recur" directive
 let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepScanDir)
@@ -160,6 +164,18 @@ dir) before the next sibling (a no-op once `recursive:true` already descends).
 `hidden` (default `false`) skips dotfile basenames and does not descend hidden
 dirs; `hidden:true` includes them. A `cb` throw aborts and propagates; a
 2nd arg that is neither a function nor an object throws.
+
+`io.stat`/`io.lstat` return `{size, mode, kind, mtime, atime}`: `size` bytes
+and `mode` (POSIX rwx bits, `0700`/`0070`/`0007`, e.g. `st.mode & 0o111` for any
+exec bit) are numbers, `kind` is `"reg"`/`"dir"`/`"lnk"`/`"other"`, and
+`mtime`/`atime` are **BigInt** `ron60` timestamps — the same encoding
+`ron.encode`/`ron.date`/the dateCol consume (`ron.date(st.mtime)` formats one).
+`io.stat` follows symlinks (a link to a regular file is `"reg"`); `io.lstat`
+does not (`"lnk"`), and stats a **dangling** link fine (no throw) since it
+inspects the link itself, never its target. `io.readlink(path)` returns a link's
+target string; `io.symlink(target, linkpath)` creates one (target stored
+verbatim, may be relative/dangling; throws if linkpath exists); `io.chmod(path,
+mode)` sets the permission bits (octal int, e.g. `0o755`).
 
 ##  feed/drain over fds
 
@@ -477,6 +493,9 @@ k.msync();
 | `io.reap`                 | `FILEReap` (`{code}` / `{signal}`)     |
 | `io.unlink`               | `FILEUnLink`                           |
 | `io.rename` / `io.mkdir`  | `FILERename` / `FILEMakeDirP`          |
+| `io.stat` / `io.lstat`    | `FILEStat` / `FILELStat` (`mtime`/`atime` ron60 BigInt) |
+| `io.readlink` / `symlink` | `FILEReadLink` / `FILESymLink`         |
+| `io.chmod`                | `FILEChmod`                            |
 | `abc.index` get/range     | `<lane>sFindGE` / `HIT<lane>SeekRange` |
 | `abc.index` compact       | `HIT<lane>Compact` (1/8 ladder)        |
 | `io.book`                 | `FILEBookCreate`                       |

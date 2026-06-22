@@ -20,6 +20,9 @@ static int JABCInt(JSContextRef ctx, JSValueRef v, JSValueRef* exception) {
   return (int)JSValueToNumber(ctx, v, exception);
 }
 
+//  Defined below (near cwd/getenv); forward-declared for io.readlink.
+static JSValueRef JABCSliceStr(JSContextRef ctx, u8cs s);
+
 //  Copy a JS-string path argument into a NUL-terminated path buffer.
 static ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
                      JSValueRef* exception) {
@@ -121,7 +124,43 @@ static JABC_FN(JABCioUnlock) {
   JABC_UNDEF;
 }
 
-//  io.stat(path) -> {size, mode, kind}
+//  Marshal a filled `filestat` into a JS {size, mode, kind, mtime, atime}
+//  object.  size/mode are plain numbers; kind is a tag string; mtime/atime
+//  are ron60 timestamps and cross as BigInt — the same encoding ron.encode /
+//  ron.date / the JS dateCol consume (JS-021).  Shared by io.stat / io.lstat.
+static JSObjectRef JABCStatObj(JSContextRef ctx, const filestat* fs) {
+  JSObjectRef obj = JSObjectMake(ctx, NULL, NULL);
+  JSStringRef k;
+  k = JSStringCreateWithUTF8CString("size");
+  JSObjectSetProperty(ctx, obj, k, JSValueMakeNumber(ctx, (double)fs->size),
+                      kJSPropertyAttributeNone, NULL);
+  JSStringRelease(k);
+  k = JSStringCreateWithUTF8CString("mode");
+  JSObjectSetProperty(ctx, obj, k, JSValueMakeNumber(ctx, (double)fs->mode),
+                      kJSPropertyAttributeNone, NULL);
+  JSStringRelease(k);
+  const char* kind = "other";
+  if (fs->kind == FILE_KIND_REG) kind = "reg";
+  else if (fs->kind == FILE_KIND_DIR) kind = "dir";
+  else if (fs->kind == FILE_KIND_LNK) kind = "lnk";
+  k = JSStringCreateWithUTF8CString("kind");
+  JSObjectSetProperty(ctx, obj, k, JSOfCString(kind), kJSPropertyAttributeNone,
+                      NULL);
+  JSStringRelease(k);
+  k = JSStringCreateWithUTF8CString("mtime");
+  JSObjectSetProperty(ctx, obj, k,
+                      JSBigIntCreateWithUInt64(ctx, (uint64_t)fs->mtime, NULL),
+                      kJSPropertyAttributeNone, NULL);
+  JSStringRelease(k);
+  k = JSStringCreateWithUTF8CString("atime");
+  JSObjectSetProperty(ctx, obj, k,
+                      JSBigIntCreateWithUInt64(ctx, (uint64_t)fs->atime, NULL),
+                      kJSPropertyAttributeNone, NULL);
+  JSStringRelease(k);
+  return obj;
+}
+
+//  io.stat(path) -> {size, mode, kind, mtime, atime}  (follows symlinks)
 static JABC_FN(JABCioStat) {
   if (argc < 1) JABC_THROW("io.stat(path)");
   a_pad(u8, path, FILE_PATH_MAX_LEN);
@@ -132,25 +171,71 @@ static JABC_FN(JABCioStat) {
   filestat fs = {};
   ok64 o = FILEStat(&fs, $path(path));
   if (o != OK) JABC_THROW(strerror(errno));
-  JSObjectRef obj = JSObjectMake(ctx, NULL, NULL);
-  JSStringRef k;
-  k = JSStringCreateWithUTF8CString("size");
-  JSObjectSetProperty(ctx, obj, k, JSValueMakeNumber(ctx, (double)fs.size),
-                      kJSPropertyAttributeNone, NULL);
-  JSStringRelease(k);
-  k = JSStringCreateWithUTF8CString("mode");
-  JSObjectSetProperty(ctx, obj, k, JSValueMakeNumber(ctx, (double)fs.mode),
-                      kJSPropertyAttributeNone, NULL);
-  JSStringRelease(k);
-  const char* kind = "other";
-  if (fs.kind == FILE_KIND_REG) kind = "reg";
-  else if (fs.kind == FILE_KIND_DIR) kind = "dir";
-  else if (fs.kind == FILE_KIND_LNK) kind = "lnk";
-  k = JSStringCreateWithUTF8CString("kind");
-  JSObjectSetProperty(ctx, obj, k, JSOfCString(kind), kJSPropertyAttributeNone,
-                      NULL);
-  JSStringRelease(k);
-  return obj;
+  return JABCStatObj(ctx, &fs);
+}
+
+//  io.lstat(path) -> {size, mode, kind, mtime, atime}  (does NOT follow the
+//  symlink: a link reports kind "lnk", and a dangling link stats fine — lstat
+//  inspects the link itself, never its target).
+static JABC_FN(JABCioLStat) {
+  if (argc < 1) JABC_THROW("io.lstat(path)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.lstat(): bad path");
+  }
+  filestat fs = {};
+  ok64 o = FILELStat(&fs, $path(path));
+  if (o != OK) JABC_THROW(strerror(errno));
+  return JABCStatObj(ctx, &fs);
+}
+
+//  io.readlink(path) -> string  (the symlink's target, over FILEReadLink).
+//  Reads into a stack path buffer; the target bytes cross as a JS string (no
+//  NUL appended by the leaf, so length is exact).  Pure marshalling.
+static JABC_FN(JABCioReadLink) {
+  if (argc < 1) JABC_THROW("io.readlink(path) -> string");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.readlink(): bad path");
+  }
+  a_path(target);
+  if (FILEReadLink(target, $path(path)) != OK) JABC_THROW(strerror(errno));
+  return JABCSliceStr(ctx, u8bDataC(target));
+}
+
+//  io.symlink(target, linkpath) -> create a symlink `linkpath` pointing at
+//  `target` (over FILESymLink).  `target` is stored verbatim (may be relative
+//  / dangling).  Pure marshalling; throws if linkpath already exists.
+static JABC_FN(JABCioSymLink) {
+  if (argc < 2) JABC_THROW("io.symlink(target, linkpath)");
+  a_pad(u8, target, FILE_PATH_MAX_LEN);
+  a_pad(u8, linkpath, FILE_PATH_MAX_LEN);
+  if (JABCPath(target, ctx, args[0], exception) != OK ||
+      JABCPath(linkpath, ctx, args[1], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.symlink(): bad path");
+  }
+  if (FILESymLink($path(target), $path(linkpath)) != OK)
+    JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
+//  io.chmod(path, mode) -> set the POSIX permission bits (over FILEChmod).
+//  `mode` is the usual octal int (e.g. 0o755); pure marshalling.
+static JABC_FN(JABCioChmod) {
+  if (argc < 2) JABC_THROW("io.chmod(path, mode)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.chmod(): bad path");
+  }
+  double dm = JSValueToNumber(ctx, args[1], exception);
+  if (*exception) return JSValueMakeUndefined(ctx);
+  if (dm < 0) JABC_THROW("io.chmod(): negative mode");
+  if (FILEChmod($path(path), (u32)dm) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
 }
 
 //  io.readdir — one entry point over FILEScanDir / FILEDeepScanDir with a
@@ -767,6 +852,10 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "lock", JABCioLock);
   JABC_API_FN(io, "unlock", JABCioUnlock);
   JABC_API_FN(io, "stat", JABCioStat);
+  JABC_API_FN(io, "lstat", JABCioLStat);
+  JABC_API_FN(io, "readlink", JABCioReadLink);
+  JABC_API_FN(io, "symlink", JABCioSymLink);
+  JABC_API_FN(io, "chmod", JABCioChmod);
   JABC_API_FN(io, "readdir", JABCioReaddir);
   JABC_API_FN(io, "_read", JABCioRead);
   JABC_API_FN(io, "_write", JABCioWrite);
