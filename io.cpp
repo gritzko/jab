@@ -238,6 +238,22 @@ static JABC_FN(JABCioChmod) {
   JABC_UNDEF;
 }
 
+//  io.setMtime(path, ron60) -> stamp a file's atime+mtime to the ron60 instant
+//  (over FILESetMtime / utimensat NOFOLLOW: a symlink stamps the link itself).
+//  ron60 crosses as a BigInt, like io.stat's mtime and ron.encode (JS-047).
+static JABC_FN(JABCioSetMtime) {
+  if (argc < 2) JABC_THROW("io.setMtime(path, ron60)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.setMtime(): bad path");
+  }
+  uint64_t ts = JSValueToUInt64(ctx, args[1], exception);
+  if (*exception) return JSValueMakeUndefined(ctx);
+  if (FILESetMtime($path(path), (ron60)ts) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
 //  io.readdir — one entry point over FILEScanDir / FILEDeepScanDir with a
 //  POLYMORPHIC 2nd arg.  FILEScanDir delivers each entry as the FULL iterator
 //  path (the scanned root + the entry name; '.'/'..' already skipped, dir
@@ -856,6 +872,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "readlink", JABCioReadLink);
   JABC_API_FN(io, "symlink", JABCioSymLink);
   JABC_API_FN(io, "chmod", JABCioChmod);
+  JABC_API_FN(io, "setMtime", JABCioSetMtime);
   JABC_API_FN(io, "readdir", JABCioReaddir);
   JABC_API_FN(io, "_read", JABCioRead);
   JABC_API_FN(io, "_write", JABCioWrite);

@@ -68,6 +68,39 @@ const dangle = dir + "/dangle";   // -> nowhere (dangling)
   if ((io.stat(file).mode & 0o111) !== 0) fail("chmod 0644: exec bits still set");
 }
 
+// io.setMtime (JS-047): stamp a ron60, lstat round-trips it EXACTLY.
+// ron60 is ms-resolution localtime; FILESetMtime -> utimensat NOFOLLOW, and
+// FILELStat reads it back via the symmetric localtime split, so the BigInt
+// must come back bit-identical.
+{
+  const r = ron.of(1700000000000); // 2023-11-14, inside ron60's 2000-2099 YY
+  io.setMtime(file, r);
+  eq(io.lstat(file).mtime, r, "setMtime round-trip via lstat");
+  // a second distinct stamp overwrites the first (no accidental no-op)
+  const r2 = ron.of(1600000000000); // 2020-09-13
+  io.setMtime(file, r2);
+  eq(io.lstat(file).mtime, r2, "setMtime second stamp");
+}
+
+// NOFOLLOW: stamping the symlink `link` (-> file, made above) stamps the LINK,
+// not its target.  Stamp file to r1, then link to r2; lstat(link)===r2 while
+// stat(file) stays r1.
+{
+  const r1 = ron.of(1700000000000); // already file's mtime from the block above
+  const r2 = ron.of(1500000000000); // 2017-07-14
+  io.setMtime(file, r1);
+  io.setMtime(link, r2);                   // stamps the link itself, NOFOLLOW
+  eq(io.lstat(link).mtime, r2, "setMtime stamps the link (NOFOLLOW)");
+  eq(io.stat(file).mtime, r1, "setMtime(link) did not touch the target");
+}
+
+// a missing path throws (errno-mapped), like the other io.* leaves
+{
+  let threw = false;
+  try { io.setMtime(dir + "/nonexistent", ron.now()); } catch (e) { threw = true; }
+  if (!threw) fail("setMtime(missing) did not throw");
+}
+
 // cleanup
 io.unlink(dangle);
 io.unlink(link);

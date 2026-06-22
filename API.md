@@ -139,6 +139,7 @@ let ls = io.lstat("link");        // same shape, no symlink follow (FILELStat)
 io.symlink("data", "link");       // create a symlink → target     (FILESymLink)
 let tg = io.readlink("link");     // → target string               (FILEReadLink)
 io.chmod("data", 0o755);          // set POSIX perm bits           (FILEChmod)
+io.setMtime("data", st.mtime);    // stamp atime+mtime (ron60 BigInt, NOFOLLOW) (FILESetMtime)
 let ns = io.readdir("dir");       // → string[], dirs marked "x/"  (FILEScanDir)
 io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"recur" directive
 let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepScanDir)
@@ -175,7 +176,12 @@ does not (`"lnk"`), and stats a **dangling** link fine (no throw) since it
 inspects the link itself, never its target. `io.readlink(path)` returns a link's
 target string; `io.symlink(target, linkpath)` creates one (target stored
 verbatim, may be relative/dangling; throws if linkpath exists); `io.chmod(path,
-mode)` sets the permission bits (octal int, e.g. `0o755`).
+mode)` sets the permission bits (octal int, e.g. `0o755`). `io.setMtime(path,
+ron60)` stamps a file's atime **and** mtime to a `ron60` BigInt instant (the
+inverse of the `stat` read, so `io.lstat(path).mtime` round-trips it exactly);
+it is `AT_SYMLINK_NOFOLLOW`, so stamping a symlink stamps the link, not its
+target — the primitive the JS write verbs use to leave a freshly-staged file
+looking clean to the next `be`.
 
 ##  feed/drain over fds
 
@@ -496,6 +502,7 @@ k.msync();
 | `io.stat` / `io.lstat`    | `FILEStat` / `FILELStat` (`mtime`/`atime` ron60 BigInt) |
 | `io.readlink` / `symlink` | `FILEReadLink` / `FILESymLink`         |
 | `io.chmod`                | `FILEChmod`                            |
+| `io.setMtime`             | `FILESetMtime` (`utimensat` NOFOLLOW)  |
 | `abc.index` get/range     | `<lane>sFindGE` / `HIT<lane>SeekRange` |
 | `abc.index` compact       | `HIT<lane>Compact` (1/8 ladder)        |
 | `io.book`                 | `FILEBookCreate`                       |

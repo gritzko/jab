@@ -25,6 +25,7 @@ Raw syscall leaves over abc `FILE*`; no `File` object and no custody table (the 
 
  -  `io.open`/`close`/`sync`/`size`/`resize`/`lock`/`unlock`/`stat` — fd lifecycle (`"r"|"rw"|"c"`).
  -  `io.stat`/`lstat` — `{size,mode,kind,mtime,atime}` (`mtime`/`atime` ron60 BigInt); `lstat` no-follow (dangling link OK). `readlink`/`symlink`/`chmod` round out the FILE metadata leaves (JS-042).
+ -  `io.setMtime(path, ron60BigInt)` — stamp a file's atime+mtime (`FILESetMtime`/`utimensat` NOFOLLOW: a symlink stamps the link); round-trips `lstat().mtime` exactly (JS-047).
  -  `io.readdir(path[, cbOrOpts])` — scan a dir (dirs trail `/`); polymorphic 2nd arg (cb / `{recursive,callback,hidden}`), cb in-frame.
  -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); cursor advance is the `Buf`'s job.
  -  `io._mmap`/`io._ram`/`io._msync` — file or anon mmap → `Uint8Array` (munmap on GC); flush a mapped view's pages.
