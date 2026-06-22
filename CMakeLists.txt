@@ -74,6 +74,12 @@ add_test(NAME JABCpol COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/pol.js)
 add_test(NAME JABCnet COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/net.js)
 # JS-035: top-level test/js dir (not js-local), so ${CMAKE_SOURCE_DIR}.
 add_test(NAME JABCzip COMMAND jabc ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
+# JS-048: bin/lib/ulog.js (ULOG read+write: drain readers + crash-safe
+# monotonic appender) + bin/lib/store.js (object + ref read+write: ref
+# resolve readers + createShard/set/tombstone writers), pure-JS unit tests
+# on jabc.  (JABCulog is the abc ULOG-binding test under js/test/, distinct.)
+add_test(NAME JABCulogLib COMMAND jabc ${CMAKE_SOURCE_DIR}/test/js/ulog.js)
+add_test(NAME JABCstore COMMAND jabc ${CMAKE_SOURCE_DIR}/test/js/store.js)
 
 # Script argv reaches JS: run a generated script with a tail of args and grep the
 # JSON it logs to stderr (`args` + Node-shaped `process.argv`) — JS-015.
@@ -82,5 +88,5 @@ add_test(NAME JABCargv
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCpol JABCnet JABCzip JABCargv PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCpol JABCnet JABCzip JABCulogLib JABCstore JABCargv PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
