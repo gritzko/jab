@@ -513,9 +513,17 @@ static const char* JABC_CONT_JS = R"JS(
     //  parents / foster are 40-hex strings; author/committer/body are strings.
     parseCommit: (bytes) => abc._git_parse_commit(bytes),
     //  delta.apply(base, delta, out): reconstruct a delta target into out (Buf)
+    //  delta.encode(base, target, out): JS-036 twin — append the delta stream
+    //  into out (Buf); -1 on DELTFAIL so the caller stores raw instead.
     delta: {
       apply: (base, delta, out) => {
         const n = abc._delt_apply(base, delta, out.idle(), 0);
+        out.fed(n);
+        return n;
+      },
+      encode: (base, target, out) => {
+        const n = abc._delt_encode(base, target, out.idle(), 0);
+        if (n < 0) return -1;
         out.fed(n);
         return n;
       },

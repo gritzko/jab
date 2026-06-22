@@ -230,6 +230,23 @@ static JABC_FN(JABCdeltApply) {
   return JSValueMakeNumber(ctx, (double)(size_t)(og[1] - op));
 }
 
+//  JS-036: _delt_encode(base, target, out, outOff) -> n delta bytes appended
+//  at out[outOff], or -1 on DELTFAIL (delta not smaller than target -> raw).
+static JABC_FN(JABCdeltEncode) {
+  if (argc < 4) JABC_THROW("delt._encode(base, target, out, outOff)");
+  u8s base = {}, target = {}, out = {};
+  if (!JABCBytesOf(base, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCBytesOf(target, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
+  size_t oo = (size_t)JSValueToNumber(ctx, args[3], exception);
+  u8* o[4] = {out[0], out[0] + oo, out[0] + oo, out[1]};  //  DATA ends at outOff
+  u8csc b = {base[0], base[1]}, t = {target[0], target[1]};
+  ok64 r = DELTEncode(b, t, (u8bp)o);
+  if (r == DELTFAIL) return JSValueMakeNumber(ctx, -1);
+  if (r != OK) JABC_THROW("delt: encode");
+  return JSValueMakeNumber(ctx, (double)(size_t)(o[2] - (out[0] + oo)));
+}
+
 //  _pack_scan(buf, dataLen, out, base, delta) -> entry count
 //  GIT-010: pure marshalling over the dog/git scan-emit PIDXScan.  Walk the
 //  whole pack [0, dataLen), resolve+git-sha each object, and drop one wh128
@@ -395,6 +412,7 @@ static inline void JABCPackInstall(JSObjectRef o) {
   JABC_API_FN(o, "_pack_scan", JABCpackScan);
   JABC_API_FN(o, "_pack_feed_emit", JABCpackFeedEmit);
   JABC_API_FN(o, "_delt_apply", JABCdeltApply);
+  JABC_API_FN(o, "_delt_encode", JABCdeltEncode);
 }
 
 #endif
