@@ -249,6 +249,33 @@ io.close(fd); let {code} = io.reap(pid);
 let out = io.mmap("/tmp/out", "r"); io.unlink("/tmp/out");      // zero-copy Buf
 ```
 
+##  tty — terminal control (raw mode / winsize)
+
+For an interactive pager (`bin/bro.js`). Over abc/ANSI's `ANSI*` POSIX
+wrappers (next to `ANSIBgColor`, which shares the raw-mode dance). STATELESS
+like every leaf: `tty.raw` RETURNS the saved termios as a
+`Uint8Array` that JS holds; `tty.cook` takes those bytes back to restore. C
+keeps no per-fd state, so YOU own the saved-state buffer and the
+restore-on-exit safety (a `try/finally` around the loop). Keystrokes come from
+`io.open("/dev/tty", "rw")` so input still works when stdin is a data pipe.
+
+```js
+let fd = io.open("/dev/tty", "rw");          // O_RDWR|O_NOCTTY under the hood
+let saved = tty.raw(fd);                      // enter raw, → savedTermios (Uint8Array)
+try {
+  let {rows, cols} = tty.size(fd);            // ioctl TIOCGWINSZ; re-query per tick
+  // ... interactive loop: io.read(fd, buf), paint, re-query size on change ...
+} finally {
+  tty.cook(fd, saved);                        // ALWAYS restore — a crash else wedges the shell
+  io.close(fd);
+}
+```
+
+`tty.raw` clears `ECHO|ICANON|ISIG|IEXTEN`, `IXON|ICRNL|BRKINT|INPCK|ISTRIP`,
+`OPOST` and sets `VMIN=0 VTIME=1` (the bro/BRO.c set). `tty.size(fd?)` defaults
+to stdout. `tty.openpty()` → `{master, slave}` and `tty.setSize(fd, rows, cols)`
+are pty test support (no controlling tty exists under ctest).
+
 ##  text
 
 ```js

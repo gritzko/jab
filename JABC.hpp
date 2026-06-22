@@ -83,6 +83,7 @@ ok64 JABCRequireInstall();
 ok64 JABCPolInstall();
 ok64 JABCPolUninstall();
 ok64 JABCNetInstall();
+ok64 JABCTtyInstall();
 ok64 JABCioUninstall();
 
 #endif

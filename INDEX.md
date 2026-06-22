@@ -140,6 +140,14 @@ SGR escape-code wrappers, no abc/ANSI link; gate on `io.isatty(fd)` to fall back
  -  `ansi.bold`/`dim`/`italic`/`under`/`rev` — style wrappers, each `s` → `ESC[n m … ESC[0m`.
  -  `ansi.black`/`red`/`green`/`yellow`/`blue`/`magenta`/`cyan`/`white`/`grey` — colour wrappers; `ansi.reset`, `ansi.sgr(n)`.
 
+###  tty.cpp — terminal control leaf (JS-053)
+
+Raw-mode + winsize over abc/ANSI's `ANSI*` POSIX wrappers (beside `ANSIBgColor`, sharing the raw-mode dance), for the `bin/bro.js` pager.  STATELESS (rule #4): JS owns the saved termios; C holds no per-fd state.  Pair with `io.open("/dev/tty","rw")` for keystrokes.
+
+ -  `tty.raw(fd)` → `Uint8Array` — enter raw (BRO.c flags) and RETURN the saved termios; `tty.cook(fd, saved)` restores it.
+ -  `tty.size(fd?)` → `{rows, cols}` — `TIOCGWINSZ` (default fd is stdout); the pager re-queries it per input tick (no SIGWINCH).
+ -  `tty.openpty()` → `{master, slave}` / `tty.setSize(fd, rows, cols)` — pty + `TIOCSWINSZ` test support (no `/dev/tty` under ctest).
+
 ###  require.cpp — synchronous CommonJS `require()`
 
 Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`, `io.stat` to probe) — no engine module loader, no promises.
@@ -151,7 +159,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 
 `main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.
 
- -  module install order — utf8 → io → buf → cont → tok → uri → codec → zip → ansi → pol → net → require.
+ -  module install order — utf8 → io → buf → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jabc", script, ...]`).
  -  run + drain — `JABCRun` propagates an uncaught exception to the exit code, then `pol.run(pol.NEVER)` drains the loop (Node-like).
  -  teardown order — release the context BEFORE `FILECloseAll` so GC deallocators (munmap) run while FILE is alive.

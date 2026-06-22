@@ -94,6 +94,7 @@ static void JABCInstallModules() {
   JABCCodecInstall(); //  hex + sha1/sha256 + ron
   JABCZipInstall();   //  zip.deflate/inflate raw zlib over dog/git/ZINF (JS-035)
   JABCAnsiInstall();  //  ansi colour helper (pure JS)
+  JABCTtyInstall();   //  tty.raw/cook/size terminal control over abc/FILE (JS-053)
   JABCPolInstall();   //  poll() event loop over abc/POL (handlers do io.* I/O)
   JABCNetInstall();   //  net/dgram + Node timers over pol (sockets do io.* I/O)
   JABCRequireInstall(); //  sync CommonJS require() over io.mmap/utf8 (last)
