@@ -253,6 +253,22 @@ to the wall clock like `RONNow` (localtime), and only span **2000-2099** —
 `ron.of` of an out-of-range instant throws. `ron.date` renders the same
 relative form `be log`/`be status` use (`DOGutf8sFeedDate`), centre-padded to
 7 columns; `ron.date(0n)` is the `"?"` placeholder.
+
+##  zip — raw zlib (deflate / inflate)
+
+```js
+zip.deflate(bytes[, out]);  // → fresh Uint8Array, or write into an out Buf → n
+zip.inflate(bytes[, out]);  // → fresh Uint8Array, or write into an out Buf → n
+```
+
+Pure marshalling over `dog/git/ZINF` (the same zlib the pack reader uses), the
+standalone-stream primitive a pure-JS git-wire client needs (loose objects,
+REF_DELTA bodies). With no `out` you get a freshly-sized `Uint8Array`; `inflate`
+grows-and-retries when the result is bigger than its first guess. With an `out`
+`Buf` the bytes land in IDLE, `fed` advances, and the byte count is returned
+(zero-copy). JS owns the out buffer — the leaf sizes nothing. Bad zlib input
+throws.
+
 ##  abc.index — mmap LSM index (point / range / prefix / seek)
 
 A `abc.index(lane, {dir, ext, mem})` is a stack of immutable sorted runs
@@ -468,3 +484,4 @@ k.msync();
 | `io.ram`                  | `u8bMap` (anonymous)                   |
 | `ron.now` / `of`          | `RONNow` / `localtime`+`RONOfTime`     |
 | `ron.date`                | `RONToTime`+`mktime`+`DOGutf8sFeedDate`|
+| `zip.deflate` / `inflate` | `ZINFDeflate` / `ZINFInflate`          |

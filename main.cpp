@@ -92,6 +92,7 @@ static void JABCInstallModules() {
   JABCTokInstall();   //  tok.parse + TokStream over dog/tok (JS-023)
   JABCUriInstall();   //  URI class over abc/URI
   JABCCodecInstall(); //  hex + sha1/sha256 + ron
+  JABCZipInstall();   //  zip.deflate/inflate raw zlib over dog/git/ZINF (JS-035)
   JABCAnsiInstall();  //  ansi colour helper (pure JS)
   JABCPolInstall();   //  poll() event loop over abc/POL (handlers do io.* I/O)
   JABCNetInstall();   //  net/dgram + Node timers over pol (sockets do io.* I/O)

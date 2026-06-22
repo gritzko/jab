@@ -29,7 +29,7 @@ include_directories(
 # node codegen step (node is not a build dependency).
 # abc/POL.c (pol) and NET/TCP/UDP.c (net/dgram) are stripped from abc-core
 # (grouped with CURL); compile them straight into jabc for the socket/loop leaves.
-set(JABC_SRC main.cpp io.cpp utf8.cpp buf.cpp cont.cpp tok.cpp uri.cpp codec.cpp ansi.cpp require.cpp
+set(JABC_SRC main.cpp io.cpp utf8.cpp buf.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp require.cpp
     pol.cpp ../abc/POL.c net.cpp ../abc/NET.c ../abc/TCP.c ../abc/UDP.c)
 
 add_executable(jabc ${JABC_SRC})
@@ -71,6 +71,8 @@ add_test(NAME JABCweave COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/weave.js)
 add_test(NAME JABCansi COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/ansi.js)
 add_test(NAME JABCpol COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/pol.js)
 add_test(NAME JABCnet COMMAND jabc ${CMAKE_CURRENT_SOURCE_DIR}/test/net.js)
+# JS-035: top-level test/js dir (not js-local), so ${CMAKE_SOURCE_DIR}.
+add_test(NAME JABCzip COMMAND jabc ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
 
 # Script argv reaches JS: run a generated script with a tail of args and grep the
 # JSON it logs to stderr (`args` + Node-shaped `process.argv`) — JS-015.
@@ -79,5 +81,5 @@ add_test(NAME JABCargv
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCpol JABCnet JABCargv PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCpol JABCnet JABCzip JABCargv PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")

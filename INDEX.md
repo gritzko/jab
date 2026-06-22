@@ -99,6 +99,13 @@ Pure stateless transforms holding no refs, plus the `ron60`-as-timestamp codec (
  -  `ron.encode`/`ron.decode` — `ron60`↔BigInt (RON base64).
  -  `ron.now()`/`ron.of(Date|ms)`/`ron.date(r)` — a `ron60` as a ULOG `ts`: now, from a Date/ms, the relative `be log` string (localtime).
 
+###  zip.cpp — raw zlib (de)compression over dog/git/ZINF (JS-035)
+
+Pure marshalling over `ZINFDeflate`/`ZINFInflate`; the missing primitive for a pure-JS git-wire client (loose objects, REF_DELTA bodies). JS owns the out buffer; the leaf sizes nothing.
+
+ -  `zip._deflate`/`_inflate(src, out, outOff)` — RAW leaves: (de)compress into `out` at `outOff`, return bytes produced.
+ -  `zip.deflate(bytes[, out])`/`inflate(bytes[, out])` — sugar: no `out` → fresh sized Uint8Array (inflate grows-retries); `out` Buf → IDLE+`fed`, return n.
+
 ###  pol.cpp — `pol` event loop over abc/POL
 
 The `poll(2)` loop, rule #4 kept: C holds NO per-fd JS closures — the `fd→handler` table lives in an embedded JS bundle, C routes through two protected refs. Contract in [POL.md].
@@ -142,7 +149,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 
 `main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.
 
- -  module install order — utf8 → io → buf → cont → tok → uri → codec → ansi → pol → net → require.
+ -  module install order — utf8 → io → buf → cont → tok → uri → codec → zip → ansi → pol → net → require.
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jabc", script, ...]`).
  -  run + drain — `JABCRun` propagates an uncaught exception to the exit code, then `pol.run(pol.NEVER)` drains the loop (Node-like).
  -  teardown order — release the context BEFORE `FILECloseAll` so GC deallocators (munmap) run while FILE is alive.
