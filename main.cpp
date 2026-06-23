@@ -15,49 +15,32 @@ thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 u8 _pro_depth = 0;
 extern "C" _Thread_local u8* ABC_BASS[4] = {};
 
-static JSValueRef JSPropertyMessage = NULL;
-static JSValueRef JSPropertyStack = NULL;
-
 static void JSInit() {
   JABC_CONTEXT = JSGlobalContextCreate(NULL);
   JABC_GLOBAL_OBJECT = JSContextGetGlobalObject(JABC_CONTEXT);
-
-  JSStringRef m = JSStringCreateWithUTF8CString("message");
-  JSPropertyMessage = JSValueMakeString(JABC_CONTEXT, m);
-  JSStringRelease(m);
-  JSValueProtect(JABC_CONTEXT, JSPropertyMessage);
-
-  JSStringRef s = JSStringCreateWithUTF8CString("stack");
-  JSPropertyStack = JSValueMakeString(JABC_CONTEXT, s);
-  JSStringRelease(s);
-  JSValueProtect(JABC_CONTEXT, JSPropertyStack);
 }
 
 static void JSClose() {
-  JSValueUnprotect(JABC_CONTEXT, JSPropertyStack);
-  JSValueUnprotect(JABC_CONTEXT, JSPropertyMessage);
   JSGlobalContextRelease(JABC_CONTEXT);
   JABC_CONTEXT = NULL;
   JABC_GLOBAL_OBJECT = NULL;
-  JSPropertyMessage = NULL;
-  JSPropertyStack = NULL;
 }
 
-//  Report a JS exception (message + stack if present) to stderr.
+//  Report an uncaught JS exception to stderr as `String(value)` — for an
+//  Error that is `"<name>: <message>"`.  We deliberately do NOT read the
+//  Error's `.stack` (nor `.line`/`.sourceURL`): touching any of them lazily
+//  materialises JSC source-provider state the VM caches and never frees
+//  before exit, so a failing `jab <script>` would trip LeakSanitizer on a
+//  clean teardown (the JSC-internal-leak class js/lsan.supp targets — but
+//  here we avoid creating it at all).  The name+message is the actionable
+//  part; the C-API `.stack` text (`eval code@…`) was low-value anyway.
 void JABCReport(JSValueRef exception) {
   char page[PAGESIZE];
-  if (JSValueIsObject(JABC_CONTEXT, exception) &&
-      JSObjectHasPropertyForKey(JABC_CONTEXT, (JSObjectRef)exception,
-                                JSPropertyStack, NULL)) {
-    JSValueRef ref = JSObjectGetPropertyForKey(
-        JABC_CONTEXT, (JSObjectRef)exception, JSPropertyStack, NULL);
-    JSStringRef rs = JSValueToStringCopy(JABC_CONTEXT, ref, NULL);
-    JSStringGetUTF8CString(rs, page, PAGESIZE);
-    JSStringRelease(rs);
-    fprintf(stderr, "JS exception: %s\n", page);
+  JSStringRef es = JSValueToStringCopy(JABC_CONTEXT, exception, NULL);
+  if (es == NULL) {  //  value's toString itself threw — nothing printable
+    fprintf(stderr, "JS exception: <unprintable>\n");
     return;
   }
-  JSStringRef es = JSValueToStringCopy(JABC_CONTEXT, exception, NULL);
   JSStringGetUTF8CString(es, page, PAGESIZE);
   JSStringRelease(es);
   fprintf(stderr, "JS exception: %s\n", page);
@@ -71,18 +54,51 @@ void JABCExecute(const char* script) {
   JSStringRelease(code);
 }
 
-//  Like JABCExecute but reports whether an uncaught exception occurred, so a
-//  failing `--eval`/script run propagates to the process exit code (CTest).
+//  Run user code (a `--eval` expression, a script body, or `__main(...)`) and
+//  report whether it succeeded, so a failing run sets the process exit code
+//  (CTest).  Returns YES on success, NO after reporting a thrown error.
+//
+//  Evaluating inside a JS try/catch is load-bearing for a leak-free teardown,
+//  not cosmetic.  Two independent JSC artifacts otherwise leak on a failing
+//  run (LeakSanitizer flags them on a bare `jab <bad>`; the test harness hides
+//  them via js/lsan.supp): (1) an exception that escapes JSEvaluateScript to
+//  the C boundary is retained by JSC until exit, so it must not reach C; and
+//  (2) reading an Error's `.stack` (or `.line`/`.sourceURL`) pins JSC
+//  source-provider state the VM never frees, so we report `String(e)` (name +
+//  message), never the stack.  Indirect eval `(0,eval)(src)` runs the code in
+//  GLOBAL scope — same program semantics as a bare JSEvaluateScript — and the
+//  catch hands back the message text (or null on success).  The source rides
+//  the `__src` global so arbitrary code needs no escaping.
 static b8 JABCRun(const char* script) {
-  JSStringRef code = JSStringCreateWithUTF8CString(script);
+  {
+    JSStringRef k = JSStringCreateWithUTF8CString("__src");
+    JSObjectSetProperty(JABC_CONTEXT, JABC_GLOBAL_OBJECT, k,
+                        JSOfCString(script), kJSPropertyAttributeNone, NULL);
+    JSStringRelease(k);
+  }
+  static const char WRAP[] =
+      "(function(){try{(0,eval)(__src);return null;}"
+      "catch(e){return String(e);}})()";
+  JSStringRef code = JSStringCreateWithUTF8CString(WRAP);
   JSValueRef exception = NULL;
-  JSEvaluateScript(JABC_CONTEXT, code, NULL, NULL, 1, &exception);
+  JSValueRef r =
+      JSEvaluateScript(JABC_CONTEXT, code, NULL, NULL, 1, &exception);
   JSStringRelease(code);
+  //  The fixed wrapper itself never throws; any escape is a hard failure.
   if (exception != NULL) {
     JABCReport(exception);
     return NO;
   }
-  return YES;
+  if (JSValueIsNull(JABC_CONTEXT, r)) return YES;
+  //  `r` is the caught error's `String(e)` text (no `.stack` touched).
+  char page[PAGESIZE];
+  JSStringRef es = JSValueToStringCopy(JABC_CONTEXT, r, NULL);
+  if (es != NULL) {
+    JSStringGetUTF8CString(es, page, PAGESIZE);
+    JSStringRelease(es);
+    fprintf(stderr, "JS exception: %s\n", page);
+  }
+  return NO;
 }
 
 //  Read a script file and run it; NO on any open/size/OOM/exception failure.
