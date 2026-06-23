@@ -132,7 +132,7 @@ static void JABCInstallModules() {
   JABCRequireInstall(); //  sync CommonJS require() over io.mmap/utf8 (last)
 }
 
-#define VERSION_BOILERPLATE "jabc v0.1.0\n"
+#define VERSION_BOILERPLATE "jab v0.1.0\n"
 
 //  Set `name` on the global object to `val`.  No held refs: the JSStringRef key
 //  is released here, the value is owned by JS GC (cf. uri.cpp's JABCSetStr).
@@ -144,8 +144,8 @@ static void JABCSetGlobal(const char* name, JSValueRef val) {
 }
 
 //  Build a JS string array from argv[from, argc) (each token a fresh JS-owned
-//  string) and return it.  `head` (e.g. "jabc", script path) is prepended when
-//  non-NULL — used to shape Node's process.argv = ["jabc", script, ...tail].
+//  string) and return it.  `head` (e.g. "jab", script path) is prepended when
+//  non-NULL — used to shape Node's process.argv = ["jab", script, ...tail].
 static JSObjectRef JABCArgvArray(int argc, char** argv, int from,
                                  const char* head0, const char* head1) {
   JSObjectRef arr = JSObjectMakeArray(JABC_CONTEXT, 0, NULL, NULL);
@@ -161,7 +161,7 @@ static JSObjectRef JABCArgvArray(int argc, char** argv, int from,
 }
 
 //  Expose the script's argv tail to JS: global `args` (tokens after the script
-//  path) plus a Node-ish `process = { argv: ["jabc", script, ...tail] }`.
+//  path) plus a Node-ish `process = { argv: ["jab", script, ...tail] }`.
 //  `tail` is the index of the first token after the script path (== argc when
 //  there is none, e.g. under --eval), so `args` is empty in that case.
 static void JABCInstallArgv(int argc, char** argv, int tail,
@@ -170,7 +170,7 @@ static void JABCInstallArgv(int argc, char** argv, int tail,
   JSObjectRef proc = JSObjectMake(JABC_CONTEXT, NULL, NULL);
   JSStringRef k = JSStringCreateWithUTF8CString("argv");
   JSObjectSetProperty(JABC_CONTEXT, proc, k,
-                      JABCArgvArray(argc, argv, tail, "jabc", script_file),
+                      JABCArgvArray(argc, argv, tail, "jab", script_file),
                       kJSPropertyAttributeNone, NULL);
   JSStringRelease(k);
   JABCSetGlobal("process", proc);
@@ -212,7 +212,21 @@ int main(int argc, char** argv) {
   int rc = 0;
   if (eval_code != NULL && !JABCRun(eval_code)) rc = 1;
 
-  if (script_file != NULL && !JABCRunFile(script_file)) rc = 1;
+  //  JAB-001: an EXPLICIT path (/abs, ./rel, ../up) runs the file directly via
+  //  global eval; a BARE name runs the require machine (`__main` resolves it
+  //  through the upward be/-scan and patches process.argv[1]).
+  if (script_file != NULL) {
+    b8 explicit_path = script_file[0] == '/' ||
+        (script_file[0] == '.' && script_file[1] == '/') ||
+        (script_file[0] == '.' && script_file[1] == '.' &&
+         script_file[2] == '/');
+    if (explicit_path) {
+      if (!JABCRunFile(script_file)) rc = 1;
+    } else {
+      JABCSetGlobal("__mainSpec", JSOfCString(script_file));
+      if (!JABCRun("__main(__mainSpec)")) rc = 1;
+    }
+  }
 
   //  Node-like: once the top-level script returns, drive the event loop until
   //  no fds/timers remain.  pol.run on an already-drained queue is an instant

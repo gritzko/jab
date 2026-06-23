@@ -31,7 +31,28 @@ static const char* JABC_REQUIRE_JS = R"JS(
   function isFile(p) {
     try { return io.stat(p).kind === "reg"; } catch (e) { return false; }
   }
+  //  JAB-001: a bareword (no /, ./, ../) is NOT path-relative — it resolves
+  //  by scanning UP for `./be ../be …`, trying <be>/<name> then <name>.js in
+  //  each.  Ceiling: $HOME/be (under $HOME) else /be.
+  function isExplicit(spec) {
+    return spec[0] === "/" || spec.slice(0, 2) === "./" ||
+           spec.slice(0, 3) === "../";
+  }
+  function resolveBe(spec) {
+    const home = io.getenv("HOME");
+    const ceil = home ? normalize(home) : "/";
+    let dir = normalize(io.cwd());
+    while (true) {
+      const be = dir + "/be";
+      for (const c of [be + "/" + spec, be + "/" + spec + ".js"])
+        if (isFile(c)) return c;
+      if (dir === ceil || dir === "/") break;
+      dir = dirname(dir);
+    }
+    throw "require: cannot find 'be/" + spec + "' from '" + io.cwd() + "'";
+  }
   function resolve(spec, baseDir) {
+    if (!isExplicit(spec)) return resolveBe(spec);
     let base = normalize(spec[0] === "/" ? spec : baseDir + "/" + spec);
     for (const c of [base, base + ".js", base + "/index.js"])
       if (isFile(c)) return c;
@@ -57,6 +78,16 @@ static const char* JABC_REQUIRE_JS = R"JS(
   }
 
   g.require = makeRequire(".");                 // top-level: resolve vs cwd
+
+  //  JAB-001: `jab <bareword>` entry.  main.cpp sets g.__mainSpec then calls
+  //  __main(): resolve the bareword via the be/-scan, patch process.argv[1] to
+  //  the resolved abspath (so the script's `here` idiom sees its real path),
+  //  then load it through require (cache + relative ./ resolution apply).
+  g.__main = function (spec) {
+    const abs = resolveBe(spec);
+    if (g.process && g.process.argv) g.process.argv[1] = abs;
+    return load(abs, dirname(abs));
+  };
 })(this);
 )JS";
 

@@ -1,8 +1,8 @@
 #!/bin/sh
 #  JS-015 e2e: the argv tail (tokens after the script path) must reach JS as the
-#  global `args`, and `process.argv` must be Node-shaped: ["jabc", script, ...tail].
+#  global `args`, and `process.argv` must be Node-shaped: ["jab", script, ...tail].
 #  io.log writes to stderr, so we capture stderr and grep the JSON it prints.
-#  Usage: run-015.sh /path/to/jabc
+#  Usage: run-015.sh /path/to/jab  (JAB-001: head renamed jabc→jab)
 
 set -e
 
@@ -26,8 +26,8 @@ OUT="$WORK/out.txt"
 grep -Fqx 'args=["a","b","c"]' "$OUT" || {
   echo "FAIL: expected args=[\"a\",\"b\",\"c\"], got:"; cat "$OUT"; exit 1; }
 
-#  process.argv = ["jabc", <script path>, "a", "b", "c"].
-grep -Fqx "argv=[\"jabc\",\"$SCRIPT\",\"a\",\"b\",\"c\"]" "$OUT" || {
+#  process.argv = ["jab", <script path>, "a", "b", "c"].
+grep -Fqx "argv=[\"jab\",\"$SCRIPT\",\"a\",\"b\",\"c\"]" "$OUT" || {
   echo "FAIL: process.argv mismatch, got:"; grep '^argv=' "$OUT"; exit 1; }
 
 #  --eval with no script file: args is the empty tail (tokens after --eval CODE).

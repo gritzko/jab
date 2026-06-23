@@ -48,4 +48,22 @@ function writeFile(path, text) {
   if (!threw) fail("missing module not rejected");
 }
 
+// JAB-001: a BAREWORD (no /, ./, ../ prefix) resolves via the upward `be/`
+// scan from cwd — try <be>/<name> then <be>/<name>.js.  Build `<cwd>/be/` so
+// the very first scan dir hits.
+{
+  const cwd = io.cwd();
+  io.mkdir(cwd + "/be");
+  writeFile(cwd + "/be/jab_req_be.js", "module.exports = { be: 1 };");
+  try {
+    eq(require("jab_req_be").be, 1, "bareword be/-scan (with .js)");
+    eq(require("jab_req_be.js").be, 1, "bareword be/-scan (explicit .js)");
+  } finally {
+    io.unlink(cwd + "/be/jab_req_be.js");
+  }
+  let threw = false;
+  try { require("jab_req_no_such"); } catch (e) { threw = true; }
+  if (!threw) fail("missing bareword not rejected");
+}
+
 io.log("require.js OK");

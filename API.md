@@ -468,13 +468,15 @@ the `git.delta.apply(…,out)` convention. The reused `Buf`'s IDLE head must be
 ##  script args
 
 ```js
-args;          // the argv tail after the script path: jabc t.js a b → ["a","b"]
-process.argv;  // Node-shaped: ["jabc", <script path>, ...args]
+args;          // the argv tail after the script path: jab t.js a b → ["a","b"]
+process.argv;  // Node-shaped: ["jab", <script path>, ...args]
 ```
 
 Both globals are installed before the script runs; under `--eval` (no script
 file) `args` is empty. They are plain JS-owned strings — the binding keeps no
-reference after bootstrap.
+reference after bootstrap.  JAB-001: `jab` takes either an explicit path
+(`/`,`./`,`../` — run directly) or a bareword (resolved via the upward `be/`-scan,
+with `process.argv[1]` patched to the resolved abspath).
 
 ##  Examples
 
