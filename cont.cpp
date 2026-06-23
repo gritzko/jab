@@ -147,15 +147,29 @@ static const char* JABC_CONT_JS = R"JS(
     const N2T = { 1: "commit", 2: "tree", 3: "blob", 4: "tag", 6: "ofs-delta", 7: "ref-delta" };
     const EMPTY8 = new Uint8Array(0);
     const P = Object.create(Uint8Array.prototype);
-    //  Lazily size caller-owned scratch (base + delta) off the log's own
-    //  byte length — an upper bound for any single object/delta in it.  The
-    //  dog/git feed/resolve own all format logic; the binding only marshals.
-    P._scratch = function () {
-      if (!this._bsc) {
-        const n = this.byteLength;
-        this._bsc = new Uint8Array(n);   // base scratch (resolved bytes)
+    //  JS-055: size scratch off the RECORD's resolved size (a compressible
+    //  object can inflate past the pack); `_dsc` is split, so ~2x `_bsc`.
+    const SCRATCH_MIN = 1 << 16;
+    P._scratch = function (need) {
+      let n = need ? (need | 0) : SCRATCH_MIN;
+      if (n < SCRATCH_MIN) n = SCRATCH_MIN;
+      if (!this._bsc || this._bsc.byteLength < n) {
+        this._bsc = new Uint8Array(n);     // base scratch (resolved bytes)
         this._dsc = new Uint8Array(2 * n); // delta scratch (split internally)
       }
+    };
+    //  JS-055: re-run `op` doubling scratch on the binding's NOROOM throw; any
+    //  other error (ref-delta, corruption) propagates; capped against a loop.
+    P._grow = function (need, op) {
+      this._scratch(need);
+      for (let tries = 0; tries < 40; tries++) {
+        try { return op(); }
+        catch (e) {
+          if (!("" + e).includes("NOROOM")) throw e;
+          this._scratch(this._bsc.byteLength * 2);
+        }
+      }
+      throw "pack: scratch exhausted";
     };
     P.header = function () {
       this.buffer.watermark = abc._pack_header(this, 0, 0);
@@ -169,11 +183,13 @@ static const char* JABC_CONT_JS = R"JS(
       //  dog/git writer decides OFS_DELTA vs raw from base+content.
       let base = EMPTY8, bo = -1;
       if (prevOff != null && prevOff >= 0) {
-        this._scratch();
-        base = abc._pack_resolve(this, prevOff, this._bsc, this._dsc);
+        //  JS-055: size off the base's declared resolved size; grow on NOROOM.
+        base = this._grow(abc._pack_size(this, prevOff),
+          () => abc._pack_resolve(this, prevOff, this._bsc, this._dsc));
         bo = prevOff;
       }
-      this._scratch();
+      //  delta-encode scratch must hold a delta no larger than `content`.
+      this._scratch(content.length);
       this.buffer.watermark = abc._pack_feed(this, off, t, content, base, bo, this._dsc);
       this._count = (this._count | 0) + 1;
       //  GIT-010 index-on-append: if given an `out` entry sink (a Buf), drop
@@ -189,8 +205,9 @@ static const char* JABC_CONT_JS = R"JS(
     //  resolve(out): chase this record's delta chain to full bytes via the
     //  dog/git resolver, append them to the `out` Buf.
     P.resolve = function (out) {
-      this._scratch();
-      const b = abc._pack_resolve(this, this._rec, this._bsc, this._dsc);
+      //  JS-055: presize off the record's declared size, grow on NOROOM.
+      const b = this._grow(abc._pack_size(this, this._rec),
+        () => abc._pack_resolve(this, this._rec, this._bsc, this._dsc));
       out.feed(b);
       return out;
     };
@@ -202,9 +219,11 @@ static const char* JABC_CONT_JS = R"JS(
     //  caller pipes them into an abc.index wh128 lane (idx.put(key, val)).
     //  The pack-log owns NO index: sort/merge/persist/query is the caller's.
     P.scan = function (out) {
-      this._scratch();
+      //  JS-055: an object's inflated size can exceed the pack; the per-object
+      //  max isn't known up front, so grow the scratch on NOROOM and re-scan.
       const idle = out.idle();
-      const n = abc._pack_scan(this, this.buffer.watermark | 0, idle, this._bsc, this._dsc);
+      const n = this._grow(0,
+        () => abc._pack_scan(this, this.buffer.watermark | 0, idle, this._bsc, this._dsc));
       out.fed(n * 16);                       // n wh128 entries (16 B each)
       return new BigUint64Array(idle.buffer, idle.byteOffset, n * 2);
     };

@@ -103,4 +103,52 @@ idx2.flush();
 for (let i = 0; i < app.length; i += 2)
   eq(idx2.get(app[i]), app[i + 1], "append index get == offset");
 
+// JS-055: pack.scan must walk a pack containing an object whose INFLATED size
+// exceeds the pack's byteLength — the scan scratch grows on NOROOM instead of
+// mis-reporting it as a ref-delta.  (A bigger `out` does NOT help; the limiter
+// is the resolve scratch.)
+{
+  const BIG = 2 * 1024 * 1024;
+  const big = new Uint8Array(BIG);
+  for (let i = 0; i < BIG; i++) big[i] = (i * 31 + 7) & 0x3;
+  const small = utf8.Encode("a small companion object\n");
+  const z = git.pack.ram(256 * 1024);          // byteLength << BIG
+  z.header();
+  const o1 = z.feed("blob", small);
+  const o2 = z.feed("blob", big);
+  z.finish();
+  if (z.byteLength >= BIG) fail("repro invalid: pack not smaller than object");
+  const zb = io.buf(z.count * 16 + 64);
+  const ze = z.scan(zb);                        // must not throw / loop
+  eq(ze.length, z.count * 2, "over-pack scan one entry per object");
+  const zoffs = [];
+  for (let i = 0; i < ze.length; i += 2) zoffs.push(Number(ze[i + 1]));
+  eq(JSON.stringify(zoffs.slice().sort((x, y) => x - y)),
+     JSON.stringify([o1, o2].slice().sort((x, y) => x - y)),
+     "over-pack scan vals == record offsets");
+}
+
+// JS-055 disambiguation: a REF_DELTA record (no sha-addressed base in an
+// OFS-only log) must be reported DISTINCTLY as "ref-delta", NOT mistaken for a
+// growable NOROOM (which would loop) — the OFS-only backstop is preserved.  The
+// JS writer never emits REF_DELTA, so hand-build the bytes (mirrors the dog/git
+// PIDX ref-backstop vector): header(count=1) + REF_DELTA hdr + 20-byte base sha
+// + a deflated 1-byte body.
+{
+  const body = zip.deflate(new Uint8Array([0]));     // valid zlib of 1 byte
+  const bytes = new Uint8Array(12 + 1 + 20 + body.length);
+  const z = git.pack.over(bytes);
+  z.header();                                         // 12-byte PACK header
+  bytes[8] = 0; bytes[9] = 0; bytes[10] = 0; bytes[11] = 1;   // count = 1
+  let o = 12;
+  bytes[o++] = (7 << 4) | 1;                          // type=7 REF_DELTA, size=1
+  for (let i = 0; i < 20; i++) bytes[o++] = (0x10 + i) & 0xff;  // base sha
+  bytes.set(body, o);
+  z.buffer.watermark = bytes.byteLength;
+  let msg = "";
+  try { z.scan(io.buf(64)); } catch (e) { msg = "" + e; }
+  if (!msg.includes("ref-delta")) fail("REF_DELTA not reported as ref-delta: " + msg);
+  if (msg.includes("NOROOM")) fail("REF_DELTA misreported as NOROOM");
+}
+
 io.log("packidx.js OK");

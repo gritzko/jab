@@ -209,8 +209,12 @@ static JABC_FN(JABCpackResolve) {
   u8cs pack = {c[0], c[1]};
   u8cs out = {};
   u8 type = 0;
-  if (PACKResolveOfs(pack, (u64)rec, base, delta, out, &type) != OK)
-    JABC_THROW("pack: resolve");
+  //  JS-055: surface NOROOM distinctly (the wrapper grows scratch); REF_DELTA
+  //  stays its own loud fail so detection isn't lost to a grow loop.
+  ok64 r = PACKResolveOfs(pack, (u64)rec, base, delta, out, &type);
+  if (r == NOROOM) JABC_THROW("pack: resolve NOROOM");
+  if (r == PACKREF) JABC_THROW("pack: resolve ref-delta");
+  if (r != OK) JABC_THROW("pack: resolve");
   return JABCBlob(ctx, out[0], (size_t)u8csLen(out));
 }
 
@@ -257,6 +261,8 @@ static JABC_FN(JABCdeltEncode) {
 //  it; a fresh/reset Buf IDLE head is 8-aligned) and hold count*16 bytes
 //  worst case.  A REF_DELTA (no sha-addressed base in an OFS-only log) makes
 //  PIDXScan fail -> throw, so a partial scan never half-fills a reused buffer.
+//  JS-055: NOROOM (an inflated object exceeds the scratch) is surfaced as a
+//  DISTINCT throw so the wrapper grows scratch instead of guessing ref-delta.
 static JABC_FN(JABCpackScan) {
   if (argc < 5) JABC_THROW("pack._scan(buf, dataLen, out, base, delta)");
   u8s c = {}, out = {}, base = {}, delta = {};
@@ -277,8 +283,10 @@ static JABC_FN(JABCpackScan) {
   wh128* wb = (wh128*)out[0];
   wh128* wcap = (wh128*)(out[0] + (((size_t)$len(out)) / sizeof(wh128)) * sizeof(wh128));
   wh128* wbuf[4] = {wb, wb, wb, wcap};
-  if (PIDXScan(pack, wbuf, base, delta) != OK)
-    JABC_THROW("pack.scan: scan (ref-delta? out full?)");
+  ok64 r = PIDXScan(pack, wbuf, base, delta);
+  if (r == NOROOM) JABC_THROW("pack.scan: NOROOM");
+  if (r == PACKREF) JABC_THROW("pack.scan: ref-delta");
+  if (r != OK) JABC_THROW("pack.scan: scan (out full? corrupt?)");
   size_t n = (size_t)(wbuf[2] - wb);   //  emitted entries (DATA grew by n)
   return JSValueMakeNumber(ctx, (double)n);
 }

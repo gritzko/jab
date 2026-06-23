@@ -91,4 +91,25 @@ let threw = false;
 try { p.seek(new Uint8Array(20)); } catch (e) { threw = true; }
 if (!threw) fail("sha addressing not rejected");
 
+// JS-055: an object whose INFLATED size exceeds the pack's byteLength must
+// resolve.  The scratch is sized off the record (pk.size) + grown on NOROOM,
+// not off the pack length (a 4-symbol blob deflates to a tiny pack).
+{
+  const BIG = 2 * 1024 * 1024;                 // 2 MB inflated
+  const big = new Uint8Array(BIG);
+  for (let i = 0; i < BIG; i++) big[i] = (i * 31 + 7) & 0x3;
+  const z = git.pack.ram(256 * 1024);          // pack RAM (byteLength) << inflated
+  z.header();
+  const za = z.feed("blob", big);
+  z.finish();
+  z.seek(za);
+  eq(z.size, BIG, "over-pack object declared size");
+  if (z.byteLength >= BIG) fail("repro invalid: pack not smaller than object");
+  const zo = io.buf(BIG + 64);
+  z.resolve(zo);
+  eq(zo.data().length, BIG, "over-pack resolve length == inflated");
+  eq(zo.data()[0], big[0], "over-pack byte0");
+  eq(zo.data()[BIG - 1], big[BIG - 1], "over-pack byteLast");
+}
+
 io.log("pack.js OK");
