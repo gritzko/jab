@@ -163,6 +163,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
  -  module install order — utf8 → io → buf → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
  -  script entry — JAB-001: an EXPLICIT path (`/`,`./`,`../`) runs the file directly (global eval); a BARE name sets `__mainSpec` and runs `__main` (the require machine, upward `be/`-scan).
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jab", script, ...]`).
+ -  build stamp — the same `process` carries read-only `version`/`build`/`build_date` from `dog/VERSN` (`JABCProcVersn`); "unknown" off a git checkout.
  -  run + drain — `JABCRun` propagates an uncaught exception to the exit code, then `pol.run(pol.NEVER)` drains the loop (Node-like).
  -  teardown order — release the context BEFORE `FILECloseAll` so GC deallocators (munmap) run while FILE is alive.
 

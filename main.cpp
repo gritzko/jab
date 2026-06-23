@@ -5,6 +5,7 @@
 #include "JABC.hpp"
 extern "C" {
 #include "abc/PRO.h"
+#include "dog/VERSN.h"   // process.version / .build / .build_date
 }
 
 thread_local JSGlobalContextRef JABC_CONTEXT;
@@ -160,10 +161,24 @@ static JSObjectRef JABCArgvArray(int argc, char** argv, int from,
   return arr;
 }
 
+//  Set a read-only build-metadata string `key` on `proc` from a dog/VERSN
+//  slice.  The slices back NUL-terminated literals, so `[0]` is a valid C
+//  string; no held refs (key released here, value owned by JS GC).
+static void JABCProcVersn(JSObjectRef proc, const char* key,
+                          u8 const* const* v) {
+  JSStringRef k = JSStringCreateWithUTF8CString(key);
+  JSObjectSetProperty(JABC_CONTEXT, proc, k, JSOfCString((const char*)v[0]),
+                      kJSPropertyAttributeReadOnly |
+                          kJSPropertyAttributeDontDelete,
+                      NULL);
+  JSStringRelease(k);
+}
+
 //  Expose the script's argv tail to JS: global `args` (tokens after the script
 //  path) plus a Node-ish `process = { argv: ["jab", script, ...tail] }`.
 //  `tail` is the index of the first token after the script path (== argc when
-//  there is none, e.g. under --eval), so `args` is empty in that case.
+//  there is none, e.g. under --eval), so `args` is empty in that case.  The
+//  same `process` carries the build stamp: `version` / `build` / `build_date`.
 static void JABCInstallArgv(int argc, char** argv, int tail,
                             const char* script_file) {
   JABCSetGlobal("args", JABCArgvArray(argc, argv, tail, NULL, NULL));
@@ -173,6 +188,9 @@ static void JABCInstallArgv(int argc, char** argv, int tail,
                       JABCArgvArray(argc, argv, tail, "jab", script_file),
                       kJSPropertyAttributeNone, NULL);
   JSStringRelease(k);
+  JABCProcVersn(proc, "version", VERSNVersion);
+  JABCProcVersn(proc, "build", VERSNHash);
+  JABCProcVersn(proc, "build_date", VERSNDate);
   JABCSetGlobal("process", proc);
 }
 
