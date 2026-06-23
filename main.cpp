@@ -84,6 +84,38 @@ static b8 JABCRun(const char* script) {
   return YES;
 }
 
+//  Read a script file and run it; NO on any open/size/OOM/exception failure.
+//  The read lives in a worker (not inline in main) so every failure returns
+//  to main's shared teardown instead of a bare `return` that would leak the
+//  whole JS context (JS-054; cf. the wrapper/worker idiom, CLAUDE.md §5).
+static b8 JABCRunFile(const char* script_file) {
+  FILE* f = fopen(script_file, "rb");
+  if (!f) {
+    fprintf(stderr, "Error: cannot open %s\n", script_file);
+    return NO;
+  }
+  fseek(f, 0, SEEK_END);
+  long len = ftell(f);
+  if (len < 0) {
+    fprintf(stderr, "Error: cannot size %s\n", script_file);
+    fclose(f);
+    return NO;
+  }
+  rewind(f);
+  char* script = (char*)malloc((size_t)len + 1);
+  if (!script) {
+    fprintf(stderr, "Error: out of memory reading %s\n", script_file);
+    fclose(f);
+    return NO;
+  }
+  size_t got = fread(script, 1, (size_t)len, f);
+  fclose(f);
+  script[got] = '\0';
+  b8 ok = JABCRun(script);
+  free(script);
+  return ok;
+}
+
 static void JABCInstallModules() {
   JABCutf8Install();
   JABCioInstall();
@@ -180,32 +212,7 @@ int main(int argc, char** argv) {
   int rc = 0;
   if (eval_code != NULL && !JABCRun(eval_code)) rc = 1;
 
-  if (script_file != NULL) {
-    FILE* f = fopen(script_file, "rb");
-    if (!f) {
-      fprintf(stderr, "Error: cannot open %s\n", script_file);
-      return 1;
-    }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    if (len < 0) {
-      fprintf(stderr, "Error: cannot size %s\n", script_file);
-      fclose(f);
-      return 1;
-    }
-    rewind(f);
-    char* script = (char*)malloc((size_t)len + 1);
-    if (!script) {
-      fprintf(stderr, "Error: out of memory reading %s\n", script_file);
-      fclose(f);
-      return 1;
-    }
-    size_t got = fread(script, 1, (size_t)len, f);
-    fclose(f);
-    script[got] = '\0';
-    if (!JABCRun(script)) rc = 1;
-    free(script);
-  }
+  if (script_file != NULL && !JABCRunFile(script_file)) rc = 1;
 
   //  Node-like: once the top-level script returns, drive the event loop until
   //  no fds/timers remain.  pol.run on an already-drained queue is an instant

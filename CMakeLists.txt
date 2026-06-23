@@ -87,6 +87,13 @@ add_test(NAME JABCstore COMMAND jabc ${CMAKE_SOURCE_DIR}/test/js/store.js)
 add_test(NAME JABCargv
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-015.sh $<TARGET_FILE:jabc>)
 
+# JS-054: error-exit paths must run the same teardown as success, so a failed
+# script-file open frees the JS context.  Deliberately NOT in the suppression
+# group below — the broad JSC suppression would mask the leak; the script runs
+# unsuppressed and self-calibrates against the clean exit.
+add_test(NAME JABCleakExit
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-054.sh $<TARGET_FILE:jabc>)
+
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
 set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCtty JABCpol JABCnet JABCzip JABCulogLib JABCstore JABCargv PROPERTIES
