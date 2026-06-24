@@ -255,7 +255,12 @@ int main(int argc, char** argv) {
         (script_file[0] == '.' && script_file[1] == '.' &&
          script_file[2] == '/');
     if (explicit_path) {
-      if (!JABCRunFile(script_file)) rc = 1;
+      //  Bind the top-level require to the script's own dir so a sibling
+      //  `require("./lib/x.js")` resolves script-relative under global eval
+      //  (drops the `here = argv[1].slice(...)` idiom).
+      JABCSetGlobal("__mainSpec", JSOfCString(script_file));
+      if (!JABCRun("__rebaseRequire(__mainSpec)") || !JABCRunFile(script_file))
+        rc = 1;
     } else {
       JABCSetGlobal("__mainSpec", JSOfCString(script_file));
       if (!JABCRun("__main(__mainSpec)")) rc = 1;

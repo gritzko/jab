@@ -33,15 +33,19 @@ static const char* JABC_REQUIRE_JS = R"JS(
   }
   //  JAB-001: a bareword (no /, ./, ../) is NOT path-relative — it resolves
   //  by scanning UP for `./be ../be …`, trying <be>/<name> then <name>.js in
-  //  each.  Ceiling: $HOME/be (under $HOME) else /be.
+  //  each.  Ceiling: $HOME/be (under $HOME) else /be.  The scan starts at
+  //  `from` — the REQUIRING script's dir for a require() (so `require("lib/
+  //  x.js")` finds the be/ shard nearest the script, cwd-independent and free
+  //  of the cwd wrong-copy hazard); cwd for a bareword ENTRY (no requirer).
   function isExplicit(spec) {
     return spec[0] === "/" || spec.slice(0, 2) === "./" ||
            spec.slice(0, 3) === "../";
   }
-  function resolveBe(spec) {
+  function resolveBe(spec, from) {
+    const start = from || io.cwd();
     const home = io.getenv("HOME");
     const ceil = home ? normalize(home) : "/";
-    let dir = normalize(io.cwd());
+    let dir = normalize(start);
     while (true) {
       const be = dir + "/be";
       for (const c of [be + "/" + spec, be + "/" + spec + ".js"])
@@ -49,10 +53,10 @@ static const char* JABC_REQUIRE_JS = R"JS(
       if (dir === ceil || dir === "/") break;
       dir = dirname(dir);
     }
-    throw "require: cannot find 'be/" + spec + "' from '" + io.cwd() + "'";
+    throw "require: cannot find 'be/" + spec + "' from '" + start + "'";
   }
   function resolve(spec, baseDir) {
-    if (!isExplicit(spec)) return resolveBe(spec);
+    if (!isExplicit(spec)) return resolveBe(spec, baseDir);
     let base = normalize(spec[0] === "/" ? spec : baseDir + "/" + spec);
     for (const c of [base, base + ".js", base + "/index.js"])
       if (isFile(c)) return c;
@@ -78,6 +82,17 @@ static const char* JABC_REQUIRE_JS = R"JS(
   }
 
   g.require = makeRequire(".");                 // top-level: resolve vs cwd
+
+  //  An EXPLICIT-path entry (`jab ./x.js`, `jab /abs/x.js`) runs via global
+  //  eval, so its top-level require would resolve `./lib/y.js` against the
+  //  CWD, not the script.  Rebind it to the script's OWN dir so a sibling
+  //  `require("./lib/y.js")` works script-relative — no `here` idiom needed.
+  //  main.cpp calls this before eval'ing the file; bareword entries skip it
+  //  (they load through __main, which already binds require to the module dir).
+  g.__rebaseRequire = function (p) {
+    const abs = normalize(p[0] === "/" ? p : io.cwd() + "/" + p);
+    g.require = makeRequire(dirname(abs));
+  };
 
   //  JAB-001: `jab <bareword>` entry.  main.cpp sets g.__mainSpec then calls
   //  __main(): resolve the bareword via the be/-scan, patch process.argv[1] to

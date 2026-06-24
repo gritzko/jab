@@ -49,21 +49,22 @@ function writeFile(path, text) {
 }
 
 // JAB-001: a BAREWORD (no /, ./, ../ prefix) resolves via the upward `be/`
-// scan from cwd — try <be>/<name> then <be>/<name>.js.  Build `<cwd>/be/` so
-// the very first scan dir hits.
+// scan from the REQUIRING FILE's own dir (not cwd) — try <be>/<name> then
+// <be>/<name>.js.  Plant <d>/be/<name>.js next to a requiring module
+// <d>/main.js and require THAT, so the scan origin is the module's dir.
 {
-  const cwd = io.cwd();
-  io.mkdir(cwd + "/be");
-  writeFile(cwd + "/be/jab_req_be.js", "module.exports = { be: 1 };");
-  try {
-    eq(require("jab_req_be").be, 1, "bareword be/-scan (with .js)");
-    eq(require("jab_req_be.js").be, 1, "bareword be/-scan (explicit .js)");
-  } finally {
-    io.unlink(cwd + "/be/jab_req_be.js");
-  }
-  let threw = false;
-  try { require("jab_req_no_such"); } catch (e) { threw = true; }
-  if (!threw) fail("missing bareword not rejected");
+  const d = "/tmp/jabc_req_be_" + Date.now();
+  io.mkdir(d); io.mkdir(d + "/be");
+  writeFile(d + "/be/jab_req_be.js", "module.exports = { be: 1 };");
+  writeFile(d + "/main.js",
+    "module.exports = [require('jab_req_be').be, require('jab_req_be.js').be];");
+  const got = require(d + "/main.js");
+  eq(got[0], 1, "bareword be/-scan from requiring dir (with .js)");
+  eq(got[1], 1, "bareword be/-scan from requiring dir (explicit .js)");
+  io.unlink(d + "/be/jab_req_be.js");
+  writeFile(d + "/miss.js",
+    "let t=false; try{require('jab_req_no_such');}catch(e){t=true;} module.exports=t;");
+  if (require(d + "/miss.js") !== true) fail("missing bareword not rejected");
 }
 
 io.log("require.js OK");
