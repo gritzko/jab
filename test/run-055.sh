@@ -1,9 +1,10 @@
 #!/bin/sh
-#  JAB-001 e2e: `jab <bareword>` and `require("<bareword>")` resolve via the
-#  upward `./be ../be …` scan (the require machine, not direct eval).  A bare
-#  name runs the require machine; `process.argv[1]` is patched to the resolved
-#  abspath so a script's `here` idiom (self.slice(0, lastIndexOf("/"))) works.
-#  Usage: run-055.sh /path/to/jab
+#  JAB e2e: a bare/relative `.js` ENTRY (`jab greet.js`) resolves via the upward
+#  `./be ../be …` scan (`__runScript`, the require machine — NOT direct eval),
+#  patches `process.argv[1]` to the resolved abspath so a script's `here` idiom
+#  (self.slice(0, lastIndexOf("/"))) works, and forwards the tail args.  A bare
+#  word WITHOUT `.js` is a VERB (routes to be/main.js, the loop) — covered by
+#  the loop tests, not here.  Usage: run-055.sh /path/to/jab
 
 set -e
 
@@ -31,11 +32,11 @@ io.log("u=" + u.name);
 io.log("args=" + JSON.stringify(args));
 JS
 
-#  1. bareword `jab greet a` from a SUBDIR resolves $WORK/be/greet.js via the
-#  upward scan, patches process.argv[1] to the abspath, forwards the tail.
+#  1. bare `.js` `jab greet.js a` from a SUBDIR resolves $WORK/be/greet.js via
+#  the upward scan, patches process.argv[1] to the abspath, forwards the tail.
 OUT="$WORK/out.txt"
-( cd "$WORK/sub/deep" && "$JAB" greet a ) >/dev/null 2>"$OUT" \
-  || { echo "FAIL: jab greet exited non-zero"; cat "$OUT"; exit 1; }
+( cd "$WORK/sub/deep" && "$JAB" greet.js a ) >/dev/null 2>"$OUT" \
+  || { echo "FAIL: jab greet.js exited non-zero"; cat "$OUT"; exit 1; }
 grep -Fqx "self=$WORK/be/greet.js" "$OUT" || {
   echo "FAIL: process.argv[1] not patched to resolved abspath:"; cat "$OUT"; exit 1; }
 grep -Fqx 'u=u' "$OUT" || {
@@ -43,16 +44,9 @@ grep -Fqx 'u=u' "$OUT" || {
 grep -Fqx 'args=["a"]' "$OUT" || {
   echo "FAIL: tail args not forwarded:"; cat "$OUT"; exit 1; }
 
-#  2. bareword `jab greet.js` (with the .js) resolves the same file.
-OUT2="$WORK/out2.txt"
-( cd "$WORK/sub" && "$JAB" greet.js ) >/dev/null 2>"$OUT2" \
-  || { echo "FAIL: jab greet.js exited non-zero"; cat "$OUT2"; exit 1; }
-grep -Fqx "self=$WORK/be/greet.js" "$OUT2" || {
-  echo "FAIL: <name>.js form did not resolve:"; cat "$OUT2"; exit 1; }
-
-#  3. a missing bareword fails (no be/<name>[.js] up to the ceiling).
-if ( cd "$WORK/sub/deep" && "$JAB" nope ) >/dev/null 2>"$WORK/err.txt"; then
-  echo "FAIL: jab nope should have failed"; cat "$WORK/err.txt"; exit 1
+#  2. a missing `.js` bareword fails (no be/<name>.js up to the ceiling).
+if ( cd "$WORK/sub/deep" && "$JAB" nope.js ) >/dev/null 2>"$WORK/err.txt"; then
+  echo "FAIL: jab nope.js should have failed"; cat "$WORK/err.txt"; exit 1
 fi
 
-echo "JAB-001 requireBe OK"
+echo "JAB requireBe OK"

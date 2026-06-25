@@ -649,6 +649,15 @@ static JABC_FN(JABCioGetenv) {
   return JABCSliceStr(ctx, val);
 }
 
+//  io.getpid() -> number  (this process's PID, via getpid(2)).  JOBQ keys the
+//  per-process /tmp queue name on it (core/loop.js _pid) so a dead run's queue
+//  is never resumed and two concurrent runs never collide.  No /proc, portable.
+static JABC_FN(JABCioGetpid) {
+  (void)args;
+  (void)argc;
+  return JSValueMakeNumber(ctx, (double)getpid());
+}
+
 //  io.unlink(path) -> remove a name from the filesystem (over FILEUnLink).  Pure
 //  marshalling.  (A file mmap'd before unlink stays valid: the inode lives on
 //  while mapped, so the page-cache Buf auto-cleans when GC'd — see API.md.)
@@ -888,6 +897,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "reap", JABCioReap);
   JABC_API_FN(io, "isatty", JABCioIsatty);
   JABC_API_FN(io, "cwd", JABCioCwd);
+  JABC_API_FN(io, "getpid", JABCioGetpid);
   JABC_API_FN(io, "getenv", JABCioGetenv);
   JABC_API_FN(io, "log", JABCioLog);
   return OK;

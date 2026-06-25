@@ -210,6 +210,13 @@ static void JABCInstallArgv(int argc, char** argv, int tail,
   JABCSetGlobal("process", proc);
 }
 
+//  YES iff `s` ends in the literal ".js" — the script-vs-main entry switch: a
+//  `.js` first arg is a SCRIPT, anything else routes to be/main.js (the loop).
+static b8 JABCEndsWithJs(const char* s) {
+  size_t n = strlen(s);
+  return n >= 3 && strcmp(s + n - 3, ".js") == 0;
+}
+
 int main(int argc, char** argv) {
   if (u8bMap(ABC_BASS, ABC_BASS_BYTES) != OK) {
     fprintf(stderr, "ABC_BASS u8bMap failed\n");
@@ -246,24 +253,31 @@ int main(int argc, char** argv) {
   int rc = 0;
   if (eval_code != NULL && !JABCRun(eval_code)) rc = 1;
 
-  //  JAB-001: an EXPLICIT path (/abs, ./rel, ../up) runs the file directly via
-  //  global eval; a BARE name runs the require machine (`__main` resolves it
-  //  through the upward be/-scan and patches process.argv[1]).
-  if (script_file != NULL) {
-    b8 explicit_path = script_file[0] == '/' ||
-        (script_file[0] == '.' && script_file[1] == '/') ||
-        (script_file[0] == '.' && script_file[1] == '.' &&
-         script_file[2] == '/');
-    if (explicit_path) {
-      //  Bind the top-level require to the script's own dir so a sibling
-      //  `require("./lib/x.js")` resolves script-relative under global eval
-      //  (drops the `here = argv[1].slice(...)` idiom).
+  //  JAB: the first positional decides the entry shape.  A `.js` first arg is a
+  //  SCRIPT: an EXPLICIT path (/abs, ./rel, ../up) runs the file directly via
+  //  global eval (require rebased to its own dir); a bare/relative `.js` (e.g.
+  //  `foo.js`, `be/main.js`) resolves via the upward be/-scan (`__runScript`).
+  //  ANYTHING else — a verb, a `scheme:` URI, a non-.js path, or no arg at all
+  //  — routes to be/main.js (`__main`) with the user's tokens passed through
+  //  as-is at argv[2:]; the resident loop triages the verb/URI/path/no-arg.
+  if (rc == 0) {
+    if (script_file != NULL && JABCEndsWithJs(script_file)) {
+      b8 explicit_path = script_file[0] == '/' ||
+          (script_file[0] == '.' && script_file[1] == '/') ||
+          (script_file[0] == '.' && script_file[1] == '.' &&
+           script_file[2] == '/');
       JABCSetGlobal("__mainSpec", JSOfCString(script_file));
-      if (!JABCRun("__rebaseRequire(__mainSpec)") || !JABCRunFile(script_file))
+      if (explicit_path) {
+        //  Bind the top-level require to the script's own dir so a sibling
+        //  `require("./lib/x.js")` resolves script-relative under global eval.
+        if (!JABCRun("__rebaseRequire(__mainSpec)") || !JABCRunFile(script_file))
+          rc = 1;
+      } else if (!JABCRun("__runScript(__mainSpec)")) {
         rc = 1;
-    } else {
-      JABCSetGlobal("__mainSpec", JSOfCString(script_file));
-      if (!JABCRun("__main(__mainSpec)")) rc = 1;
+      }
+    } else if (eval_code == NULL) {
+      //  verb / scheme:URI / non-.js path / bare `jab` → be/main.js (the loop).
+      if (!JABCRun("__main()")) rc = 1;
     }
   }
 

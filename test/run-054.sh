@@ -21,9 +21,10 @@ if "$JABC" --eval '0' 2>&1 | grep -q "$LEAK"; then
 fi
 
 #  Repro: opening a missing script file must free the context (no leak) and
-#  still print the error + exit non-zero.
-OUT="$("$JABC" /no/such/jabc/file 2>&1)"; RC=$?
-printf '%s\n' "$OUT" | grep -Fq 'Error: cannot open /no/such/jabc/file' || {
+#  still print the error + exit non-zero.  The path MUST end in `.js` — a
+#  non-.js first arg now routes to be/main.js (the loop), not a direct open.
+OUT="$("$JABC" /no/such/jabc/file.js 2>&1)"; RC=$?
+printf '%s\n' "$OUT" | grep -Fq 'Error: cannot open /no/such/jabc/file.js' || {
   echo "FAIL: missing-file error message changed:"; printf '%s\n' "$OUT"; exit 1; }
 [ "$RC" -ne 0 ] || { echo "FAIL: missing-file run returned 0"; exit 1; }
 printf '%s\n' "$OUT" | grep -q "$LEAK" && {

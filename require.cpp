@@ -94,13 +94,26 @@ static const char* JABC_REQUIRE_JS = R"JS(
     g.require = makeRequire(dirname(abs));
   };
 
-  //  JAB-001: `jab <bareword>` entry.  main.cpp sets g.__mainSpec then calls
-  //  __main(): resolve the bareword via the be/-scan, patch process.argv[1] to
-  //  the resolved abspath (so the script's `here` idiom sees its real path),
-  //  then load it through require (cache + relative ./ resolution apply).
-  g.__main = function (spec) {
+  //  JAB: a bare/relative `.js` ENTRY (`jab foo.js`, `jab be/main.js`) — NOT an
+  //  explicit path (main.cpp runs /,./,../ directly via global eval).  Resolve
+  //  it via the upward be/-scan, pin it as argv[1], and load it as the program.
+  g.__runScript = function (spec) {
     const abs = resolveBe(spec);
     if (g.process && g.process.argv) g.process.argv[1] = abs;
+    return load(abs, dirname(abs));
+  };
+
+  //  JAB: the DEFAULT entry — any first arg that is NOT a `.js` file (a verb, a
+  //  `scheme:` URI, a non-.js path) and the no-arg `jab` route here (main.cpp
+  //  decides via the `.js` suffix and calls __main()).  Resolve be/main.js by
+  //  the same upward be/-scan, splice it in as argv[1] (so main.js's
+  //  process.argv[1] is its OWN be/-root path — core/loop.js derives `_here`
+  //  from it — and the user's tokens stay at argv[2:] AS-IS, the cli contract:
+  //  verb=argv[2]), then run it; main.js (the resident loop) triages the rest.
+  g.__main = function () {
+    const abs = resolveBe("main.js");
+    const av = g.process && g.process.argv;
+    if (av) g.process.argv = [av[0], abs].concat(av.slice(1));
     return load(abs, dirname(abs));
   };
 })(this);
