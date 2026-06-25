@@ -79,8 +79,14 @@ add_test(NAME JABCzip COMMAND jab ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
 # monotonic appender) + bin/lib/store.js (object + ref read+write: ref
 # resolve readers + createShard/set/tombstone writers), pure-JS unit tests
 # on jabc.  (JABCulog is the abc ULOG-binding test under js/test/, distinct.)
-add_test(NAME JABCulogLib COMMAND jab ${CMAKE_SOURCE_DIR}/test/js/ulog.js)
-add_test(NAME JABCstore COMMAND jab ${CMAKE_SOURCE_DIR}/test/js/store.js)
+# JS-063: be-shard unit tests moved to ../be/test/ (JS-061); guard each so a
+# checkout without the be submodule skips rather than errors.
+if(EXISTS ${CMAKE_SOURCE_DIR}/../be/test/ulog.js)
+    add_test(NAME JABCulogLib COMMAND jab ${CMAKE_SOURCE_DIR}/../be/test/ulog.js)
+endif()
+if(EXISTS ${CMAKE_SOURCE_DIR}/../be/test/store.js)
+    add_test(NAME JABCstore COMMAND jab ${CMAKE_SOURCE_DIR}/../be/test/store.js)
+endif()
 
 # Script argv reaches JS: run a generated script with a tail of args and grep the
 # JSON it logs to stderr (`args` + Node-shaped `process.argv`) — JS-015.
