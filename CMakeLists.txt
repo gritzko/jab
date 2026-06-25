@@ -105,6 +105,13 @@ add_test(NAME JABCrequireBe
 add_test(NAME JABCleakExit
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-054.sh $<TARGET_FILE:jab>)
 
+# JS-064: a bareword `jab <projector>` (the resident be/ loop) must be LSan-clean
+# on the normal exit.  Like JABCleakExit, NOT in the suppression group: the test
+# runs without an external suppressions file so it exercises the suppression now
+# embedded in the binary (main.cpp __lsan_default_suppressions).
+add_test(NAME JABCleakLoop
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-064.sh $<TARGET_FILE:jab>)
+
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
 set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCtty JABCpol JABCnet JABCzip JABCulogLib JABCstore JABCargv JABCrequireBe PROPERTIES

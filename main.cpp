@@ -8,6 +8,17 @@ extern "C" {
 #include "dog/VERSN.h"   // process.version / .build / .build_date
 }
 
+//  JS-064: embed the JSC-singleton suppression so EVERY run (a bareword `jab`,
+//  not just ctest) is leak-clean — JSC never frees its lazy VM singletons, and
+//  the loop pins more than the ctest env's lsan.supp masks.  See js/lsan.supp.
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+extern "C" const char* __lsan_default_suppressions(void) {
+  return "leak:libjavascriptcoregtk\n";
+}
+#  endif
+#endif
+
 thread_local JSGlobalContextRef JABC_CONTEXT;
 thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 
