@@ -228,6 +228,25 @@ static b8 JABCEndsWithJs(const char* s) {
   return n >= 3 && strcmp(s + n - 3, ".js") == 0;
 }
 
+//  YES iff `s` opens with a URI scheme (`<alpha><alnum|+|-|.>*:`) BEFORE any
+//  '/': a `scheme:` token (e.g. `diff:view/bro.js`) is a VIEW URI for the loop,
+//  never a script file — even when its path tail ends in `.js`.  A bare/relative
+//  path (`foo.js`, `./x.js`, `dir/x.js`) has no scheme.  Guards the `.js`-suffix
+//  script route below so `jab diff:<file>.js` reaches the loop, not require().
+static b8 JABCHasScheme(const char* s) {
+  if (s == NULL || !((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')))
+    return 0;
+  for (const char* p = s + 1; *p; p++) {
+    char c = *p;
+    if (c == ':') return 1;
+    if (c == '/') return 0;            // a path slash before any ':' — not a scheme
+    b8 ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.';
+    if (!ok) return 0;
+  }
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (u8bMap(ABC_BASS, ABC_BASS_BYTES) != OK) {
     fprintf(stderr, "ABC_BASS u8bMap failed\n");
@@ -272,7 +291,8 @@ int main(int argc, char** argv) {
   //  — routes to be/main.js (`__main`) with the user's tokens passed through
   //  as-is at argv[2:]; the resident loop triages the verb/URI/path/no-arg.
   if (rc == 0) {
-    if (script_file != NULL && JABCEndsWithJs(script_file)) {
+    if (script_file != NULL && JABCEndsWithJs(script_file) &&
+        !JABCHasScheme(script_file)) {
       b8 explicit_path = script_file[0] == '/' ||
           (script_file[0] == '.' && script_file[1] == '/') ||
           (script_file[0] == '.' && script_file[1] == '.' &&
