@@ -60,7 +60,9 @@ static JABC_FN(JABChunkFeed) {
   hk.uri[0] = uri[0];   hk.uri[1] = uri[1];
   hk.text[0] = text[0]; hk.text[1] = text[1];
   hk.toks[0] = (tok32c*)toks[0];
-  hk.toks[1] = (tok32c*)(toks[0] + $len(toks) / sizeof(tok32));
+  //  JS-092: the END is the toks BYTE-end (toks[1]), not start + tok COUNT — the
+  //  old `toks[0] + $len/sizeof` advanced a u8* by the count, a quarter the size.
+  hk.toks[1] = (tok32c*)toks[1];
   u8s into = {buf[0] + off, buf[1]};
   if (HUNKu8sFeed(into, &hk) != OK) JABC_THROW("hunk.feed: out full");
   return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - buf[0]));
@@ -128,14 +130,22 @@ static bool JABChunkAt(hunk* hk, u8s buf, JSContextRef ctx, JSValueRef bufv,
   return HUNKu8sDrain(from, hk) == OK;
 }
 
+//  JS-092 (commit: pager edge): an EMPTY uri/text is never written to the TLV
+//  (HUNK.c:129), so on drain its slice stays NULL — a NULL-minus-buf offset then
+//  throws RangeError in JABCSubU8.  Return an empty Uint8Array for an empty field.
+static JSValueRef JABChunkField(JSContextRef ctx, JSValueRef buf_arg, u8s buf,
+                                u8cs fld, JSValueRef* ex) {
+  if ($empty(fld) || fld[0] == NULL)
+    return JSObjectMakeTypedArray(ctx, kJSTypedArrayTypeUint8Array, 0, ex);
+  return JABCSubU8(ctx, buf_arg, (size_t)((u8c*)fld[0] - buf[0]), $len(fld), ex);
+}
 static JABC_FN(JABChunkUri) {
   if (argc < 2) JABC_THROW("hunk._uri(buf, recOff)");
   u8s buf = {};
   hunk hk = {};
   if (!JABChunkAt(&hk, buf, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
-  return JABCSubU8(ctx, args[0], (size_t)((u8c*)hk.uri[0] - buf[0]),
-                   $len(hk.uri), exception);
+  return JABChunkField(ctx, args[0], buf, hk.uri, exception);
 }
 static JABC_FN(JABChunkText) {
   if (argc < 2) JABC_THROW("hunk._text(buf, recOff)");
@@ -143,8 +153,7 @@ static JABC_FN(JABChunkText) {
   hunk hk = {};
   if (!JABChunkAt(&hk, buf, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
-  return JABCSubU8(ctx, args[0], (size_t)((u8c*)hk.text[0] - buf[0]),
-                   $len(hk.text), exception);
+  return JABChunkField(ctx, args[0], buf, hk.text, exception);
 }
 //  toks may sit at an unaligned offset in the record, so return a fresh
 //  (aligned) Uint32Array copy rather than an alias.

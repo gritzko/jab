@@ -42,6 +42,22 @@ const dec = (u8) => utf8.Decode(u8);
   eq(dec(h.uri), "one", "rewind uri");
 }
 
+// JS-092: feed K NON-EMPTY tok32 spans, drain ALL K back (next() succeeds,
+// toks.length === K, values preserved).  Pre-fix the binding wrote the toks
+// TLV at 1/4 the byte length, so next() rejected any K not a multiple of 4 and
+// returned 1/4 the spans otherwise — hence the K=1,2,3,7 (non-4-multiple) cases.
+function tok32(tag, end) { return ((tag & 0x1f) << 27) | (end & 0xffffff); }
+for (const K of [1, 2, 3, 4, 7]) {
+  const h = abc.ram("HUNK", 1 << 16);
+  const text = utf8.Encode("x".repeat(K));     // K bytes: K monotonic end offsets
+  const toks = new Uint32Array(K);
+  for (let i = 0; i < K; i++) toks[i] = tok32(18, i + 1);   // tag 'S', end i+1
+  h.feed("u", text, toks);
+  if (!h.next()) fail("JS-092 next() K=" + K);
+  eq(h.toks.length, K, "JS-092 toks.length K=" + K);
+  for (let i = 0; i < K; i++) eq(h.toks[i], toks[i], "JS-092 tok[" + i + "] K=" + K);
+}
+
 // render the current hunk to plain text into an out buffer
 {
   const h = abc.ram("HUNK", 1 << 16);
