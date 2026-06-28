@@ -28,6 +28,16 @@ static void JABCSetStr(JSContextRef ctx, JSObjectRef obj, const char* name,
   JSStringRelease(k);
 }
 
+//  Set component `name`: undefined when the slot is absent (sigil never
+//  appeared), else the decoded string — keeps "/p" (query undefined)
+//  distinct from "/p?" (query "").  Presence is the slice pointer being
+//  non-NULL, per URIPattern.  URI-009.
+static void JABCSetComp(JSContextRef ctx, JSObjectRef obj, const char* name,
+                        u8cs s, bool present) {
+  JABCSetStr(ctx, obj, name,
+             present ? JABCSliceStr(ctx, s) : JSValueMakeUndefined(ctx));
+}
+
 //  Copy a JS-string arg into `tmp`, fill `out` as a u8cs over it (NUL dropped).
 static void JABCArgSlice(u8cs out, JSContextRef ctx, JSValueRef v, u8* tmp,
                          size_t cap) {
@@ -53,15 +63,16 @@ static JABC_FN(JABCuriParse) {
   u.data[0] = buf;
   u.data[1] = buf + len;
   if (URILexer(&u) != OK) JABC_THROW("uri.parse: malformed");
+  u8 pat = URIPattern(&u);
   JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
-  JABCSetStr(ctx, o, "scheme", JABCSliceStr(ctx, u.scheme));
-  JABCSetStr(ctx, o, "authority", JABCSliceStr(ctx, u.authority));
-  JABCSetStr(ctx, o, "user", JABCSliceStr(ctx, u.user));
-  JABCSetStr(ctx, o, "host", JABCSliceStr(ctx, u.host));
-  JABCSetStr(ctx, o, "port", JABCSliceStr(ctx, u.port));
-  JABCSetStr(ctx, o, "path", JABCSliceStr(ctx, u.path));
-  JABCSetStr(ctx, o, "query", JABCSliceStr(ctx, u.query));
-  JABCSetStr(ctx, o, "fragment", JABCSliceStr(ctx, u.fragment));
+  JABCSetComp(ctx, o, "scheme", u.scheme, pat & URI_SCHEME);
+  JABCSetComp(ctx, o, "authority", u.authority, pat & URI_AUTHORITY);
+  JABCSetComp(ctx, o, "user", u.user, pat & URI_USER);
+  JABCSetComp(ctx, o, "host", u.host, pat & URI_HOST);
+  JABCSetComp(ctx, o, "port", u.port, pat & URI_PORT);
+  JABCSetComp(ctx, o, "path", u.path, pat & URI_PATH);
+  JABCSetComp(ctx, o, "query", u.query, pat & URI_QUERY);
+  JABCSetComp(ctx, o, "fragment", u.fragment, pat & URI_FRAGMENT);
   return o;
 }
 

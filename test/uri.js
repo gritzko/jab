@@ -18,13 +18,28 @@ function eq(a, b, m) { if (a !== b) fail(m + ": '" + a + "' !== '" + b + "'"); }
 }
 
 // beagle-shape URI (no authority): scheme:path?branch#msg
+// absent component -> undefined (not ""); see "/p" vs "/p?" below
 {
   const b = new URI("file:/home/x/.be?/dogs/main#msg");
   eq(b.scheme, "file", "be scheme");
-  eq(b.host, "", "be host (none)");
+  eq(b.authority, undefined, "be authority (absent)");
+  eq(b.host, undefined, "be host (absent)");
   eq(b.path, "/home/x/.be", "be path");
   eq(b.query, "/dogs/main", "be query");
   eq(b.fragment, "msg", "be fragment");
+}
+
+// absent vs present-but-empty: "/p" has no query, "/p?" has empty query
+{
+  const a = new URI("/p");
+  eq(a.path, "/p", "no-query path");
+  eq(a.query, undefined, "absent query -> undefined");
+  eq(a.fragment, undefined, "absent fragment -> undefined");
+  const e = new URI("/p?");
+  eq(e.path, "/p", "empty-query path");
+  eq(e.query, "", "present-empty query -> ''");
+  const f = new URI("/p#");
+  eq(f.fragment, "", "present-empty fragment -> ''");
 }
 
 // compose + percent-escape
