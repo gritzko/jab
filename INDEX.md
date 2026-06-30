@@ -29,7 +29,7 @@ Raw syscall leaves over abc `FILE*`; no `File` object and no custody table (the 
  -  `io.readdir(path[, cbOrOpts])` — scan a dir (dirs trail `/`); polymorphic 2nd arg (cb / `{recursive,callback,hidden}`), cb in-frame.
  -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); cursor advance is the `Buf`'s job.
  -  `io._mmap`/`io._ram`/`io._msync` — file or anon mmap → `Uint8Array` (munmap on GC); flush a mapped view's pages.
- -  `io.cwd`/`getenv`/`unlink`/`rename`/`mkdir` — cwd / env var / remove / atomic rename / mkdir-with-parents (back the JS-022 index flush).
+ -  `io.cwd`/`getenv`/`unlink`/`rename`/`mkdir`/`rmdir` — cwd / env var / remove / atomic rename / mkdir-with-parents / rmdir (`recursive`=rm -rf, over FILERmDir; lets checkout drop a dir on a type-change).
  -  `io.spawn`/`spawnFds`/`reap` — process leaves (JS-020): spawn → `{pid,stdin,stdout}`/pid, reap → `{code}`/`{signal}` (fds/pids are numbers).
  -  `io.log` — write strings / typed arrays to stderr.
 

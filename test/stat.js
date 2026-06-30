@@ -101,9 +101,38 @@ const dangle = dir + "/dangle";   // -> nowhere (dangling)
   if (!threw) fail("setMtime(missing) did not throw");
 }
 
+// io.rmdir (GET-039): plain rmdir drops an empty dir; ENOTEMPTY on a populated
+// one; recursive:true is rm -rf.  A missing path throws like the other leaves.
+{
+  const sub = dir + "/sub";
+  io.mkdir(sub);                                  // empty
+  io.rmdir(sub);                                  // plain rmdir of an empty dir
+  let gone = false;
+  try { io.lstat(sub); } catch (e) { gone = true; }
+  if (!gone) fail("rmdir(empty) did not remove the dir");
+
+  io.mkdir(sub);                                  // repopulate, non-empty
+  { const fd = io.open(sub + "/inner", "c"); io.close(fd); }
+  let threw = false;
+  try { io.rmdir(sub); } catch (e) { threw = true; }
+  if (!threw) fail("rmdir(non-empty) did not throw");
+
+  io.mkdir(sub + "/deep");                        // nested + a file → rm -rf
+  { const fd = io.open(sub + "/deep/leaf", "c"); io.close(fd); }
+  io.rmdir(sub, true);                            // recursive removes the subtree
+  let goneR = false;
+  try { io.lstat(sub); } catch (e) { goneR = true; }
+  if (!goneR) fail("rmdir(recursive) did not remove the subtree");
+
+  let missThrew = false;
+  try { io.rmdir(dir + "/nonexistent"); } catch (e) { missThrew = true; }
+  if (!missThrew) fail("rmdir(missing) did not throw");
+}
+
 // cleanup
 io.unlink(dangle);
 io.unlink(link);
 io.unlink(file);
+io.rmdir(dir, true);              // GET-039: drop the test dir (was leaked before)
 
 io.log("stat.js OK");

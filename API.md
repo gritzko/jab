@@ -148,6 +148,7 @@ io.readdir("dir", {recursive:true, callback:n=>{}}); // cb across the subtree
 io.unlink("tmp");                 // remove a name                  (FILEUnLink)
 io.rename("a.tmp", "a");          // atomic rename within a FS       (FILERename)
 io.mkdir("a/b/c");                // create dir + parents (idempotent)(FILEMakeDirP)
+io.rmdir("d", true);              // remove a dir (recursive=rm -rf)  (FILERmDir)
 let dir = io.cwd();               // process working directory      (FILEGetCwd)
 let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
@@ -528,6 +529,7 @@ k.msync();
 | `io.reap`                 | `FILEReap` (`{code}` / `{signal}`)     |
 | `io.unlink`               | `FILEUnLink`                           |
 | `io.rename` / `io.mkdir`  | `FILERename` / `FILEMakeDirP`          |
+| `io.rmdir`                | `FILERmDir` (`recursive` = rm -rf)     |
 | `io.stat` / `io.lstat`    | `FILEStat` / `FILELStat` (`mtime`/`atime` ron60 BigInt) |
 | `io.readlink` / `symlink` | `FILEReadLink` / `FILESymLink`         |
 | `io.chmod`                | `FILEChmod`                            |

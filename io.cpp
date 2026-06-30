@@ -703,6 +703,23 @@ static JABC_FN(JABCioMkdir) {
   JABC_UNDEF;
 }
 
+//  io.rmdir(path[, recursive]) -> remove a directory (over FILERmDir).  Plain
+//  rmdir by default (empty dir only; ENOTEMPTY otherwise); recursive:true does
+//  an rm -rf of the whole subtree.  GET-039: checkout calls it (recursive) to
+//  replace a tracked DIR with a leaf on a type-change (dir->file / dir->link),
+//  which io.unlink cannot do (unlink throws EISDIR on any directory).
+static JABC_FN(JABCioRmdir) {
+  if (argc < 1) JABC_THROW("io.rmdir(path[, recursive])");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.rmdir(): bad path");
+  }
+  bool recursive = argc > 1 ? JSValueToBoolean(ctx, args[1]) : false;
+  if (FILERmDir($path(path), recursive) != OK) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
 //  . . . . . . . . process spawn + reap (JS-020) . . . . . . . .
 //
 //  argv is a JS string[] -> a u8css (slice of u8cs) over per-call STACK
@@ -892,6 +909,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "unlink", JABCioUnlink);
   JABC_API_FN(io, "rename", JABCioRename);
   JABC_API_FN(io, "mkdir", JABCioMkdir);
+  JABC_API_FN(io, "rmdir", JABCioRmdir);
   JABC_API_FN(io, "spawn", JABCioSpawn);
   JABC_API_FN(io, "spawnFds", JABCioSpawnFds);
   JABC_API_FN(io, "reap", JABCioReap);
