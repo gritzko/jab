@@ -41,6 +41,15 @@ An embedded JS bundle: a `Buf` wraps a `Uint8Array` plus its `PAST|DATA|IDLE` bo
  -  `io.buf`/`io.ram`/`io.mmap` — `Buf` constructors over heap / anon mmap / a file.
  -  `io.read`/`write`/`readAll`/`writeAll`/`readv`/`writev` — I/O dispatch over a `Buf` or a bare `Uint8Array`.
 
+###  console.cpp — Node-style `console` (pure JS, JAB-002)
+
+A `console` global layering over `utf8.Encode` + `io.writeAll` (holds no native code); log/info/debug → stdout (1), warn/error → stderr (2).
+
+ -  `console.log`/`info`/`debug` — format the args and write a line to stdout (fd 1); `warn`/`error` write to stderr (fd 2).
+ -  `format(args)` — multi-arg space-join + `%s %d %i %f %j %o %O %c %%` expansion (`%j` is JSON, `%o` is `inspect`); leftover args appended.
+ -  `inspect(v)` — JSON-ish stringify: bareword keys, single-quoted strings, `[Circular]` on a cycle, `[Function: name]`; non-strings stringified.
+ -  `console.trace`/`assert`/`dir` — `Trace:`-prefixed stderr line / `Assertion failed`-on-falsy stderr / `inspect` one value to stdout.
+
 ###  cont.cpp — container framework over abc logs
 
 Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`) and the `git` package; families are HEAP/HASH/HUNK/ULOG/WEAVE (PACK migrated to `git`).
@@ -160,7 +169,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 
 `main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.  The binary is `jab` (renamed from `jabc`, JAB-001).
 
- -  module install order — utf8 → io → buf → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
+ -  module install order — utf8 → io → buf → console → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
  -  script entry — JAB-001: an EXPLICIT path (`/`,`./`,`../`) runs the file directly (global eval); a BARE name sets `__mainSpec` and runs `__main` (the require machine, upward `be/`-scan).
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jab", script, ...]`).
  -  build stamp — the same `process` carries read-only `version`/`build`/`build_date` from `dog/VERSN` (`JABCProcVersn`); "unknown" off a git checkout.
