@@ -148,6 +148,7 @@ static void JABCInstallModules() {
   JABCutf8Install();
   JABCioInstall();
   JABCbufInstall();   //  Buf class + constructors layer over utf8/io leaves
+  JABCConsoleInstall();  //  console.* over utf8.Encode + io.writeAll (JAB-002)
   JABCContInstall();  //  abc.* containers (HEAP/HASH) layer over io mmap leaves
   JABCTokInstall();   //  tok.parse + TokStream over dog/tok (JS-023)
   JABCUriInstall();   //  URI class over abc/URI

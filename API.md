@@ -288,6 +288,29 @@ utf8.Decode(u8);             // validate UTF-8, → JS string; throws on malform
 > U+10FFFF (via ABC `utf8sValid`/`utf8sDrain32`); it is not JSC's lenient
 `JSStringCreateWithUTF8CString`.
 
+##  console — Node-style logging (JAB-002)
+
+A pure-JS `console` over `utf8.Encode` + `io.writeAll`; no native code. `log`,
+`info`, `debug` go to **stdout** (fd 1); `warn`, `error`, `trace`, `assert` to
+**stderr** (fd 2). Each call formats its args, then writes one line + `"\n"`.
+
+```js
+console.log("hi", 1, [2, 3]);        // "hi 1 [ 2, 3 ]"   (multi-arg space-join)
+console.log("%s=%d", "n", 5);        // "n=5"             (printf specifiers)
+console.error("oops: %o", {e: 1});   // -> stderr         "oops: { e: 1 }"
+console.warn("x"); console.info("y"); console.debug("z");
+console.assert(cond, "msg");         // falsy -> "Assertion failed: msg" (stderr)
+console.trace("here");               // "Trace: here"     (stderr)
+console.dir({a: 1});                 // inspect one value (stdout)
+```
+
+Specifiers consume positional args left-to-right: `%s` string, `%d`/`%i`
+integer (truncated), `%f` float, `%j` JSON (`[Circular]` on a cycle), `%o`/`%O`
+`inspect`, `%c` CSS (consumed, no output), `%%` a literal `%`. Args left over
+after the specifiers are space-appended; a specifier with no arg stays literal.
+Objects render JSON-ish (bareword keys, single-quoted strings); a cycle is
+`[Circular]`, a function `[Function: name]`.
+
 ##  ron — `ron60` time codec
 
 ```js
