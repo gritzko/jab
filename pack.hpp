@@ -283,7 +283,7 @@ static JABC_FN(JABCpackScan) {
   wh128* wb = (wh128*)out[0];
   wh128* wcap = (wh128*)(out[0] + (((size_t)$len(out)) / sizeof(wh128)) * sizeof(wh128));
   wh128* wbuf[4] = {wb, wb, wb, wcap};
-  ok64 r = PIDXScan(pack, wbuf, base, delta);
+  ok64 r = PIDXScan(pack, 0, wbuf, base, delta);  //  PACK-001: 0 = whole pack
   if (r == NOROOM) JABC_THROW("pack.scan: NOROOM");
   if (r == PACKREF) JABC_THROW("pack.scan: ref-delta");
   if (r != OK) JABC_THROW("pack.scan: scan (out full? corrupt?)");
