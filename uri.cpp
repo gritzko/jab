@@ -41,9 +41,12 @@ static void JABCSetComp(JSContextRef ctx, JSObjectRef obj, const char* name,
 //  Copy a JS-string arg into `tmp`, fill `out` as a u8cs over it (NUL dropped).
 static void JABCArgSlice(u8cs out, JSContextRef ctx, JSValueRef v, u8* tmp,
                          size_t cap) {
+  //  URI-009 (make side): a non-string arg is an ABSENT component -> NULL
+  //  slice (no sigil); an empty string is PRESENT-empty -> {tmp,tmp} (a
+  //  bare `?`/`#`).  URIutf8Feed's `[0] != NULL` test then does the rest.
+  if (v == NULL || !JSValueIsString(ctx, v)) { out[0] = NULL; out[1] = NULL; return; }
   out[0] = tmp;
   out[1] = tmp;
-  if (!JSValueIsString(ctx, v)) return;
   JSStringRef js = JSValueToStringCopy(ctx, v, NULL);
   size_t n = JSStringGetUTF8CString(js, (char*)tmp, cap);
   JSStringRelease(js);
@@ -132,8 +135,9 @@ static const char* JABC_URI_JS = R"JS(
       this.query = p.query;         this.fragment = p.fragment;
     }
     static make(scheme, authority, path, query, fragment) {
-      return uri._make(scheme || "", authority || "", path || "",
-                       query || "", fragment || "");
+      //  URI-009: pass undefined THROUGH (no `|| ""`) so an absent part stays
+      //  absent — _make maps undefined->absent, ""->present-empty (`?`/`#`).
+      return uri._make(scheme, authority, path, query, fragment);
     }
     static escape(s)   { return uri._esc(String(s)); }
     static unescape(s) { return uri._unesc(String(s)); }

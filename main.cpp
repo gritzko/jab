@@ -55,6 +55,26 @@ void JABCReport(JSValueRef exception) {
   JSStringGetUTF8CString(es, page, PAGESIZE);
   JSStringRelease(es);
   fprintf(stderr, "JS exception: %s\n", page);
+#ifndef NDEBUG
+  //  Debug build only: also dump the Error's `.stack`.  Reading it pins JSC
+  //  source state that leaks on teardown (js/lsan.supp covers it) — acceptable
+  //  in a debug build for a real trace; release (NDEBUG) stays leak-free.
+  if (JSValueIsObject(JABC_CONTEXT, exception)) {
+    JSObjectRef obj = JSValueToObject(JABC_CONTEXT, exception, NULL);
+    JSStringRef key = JSStringCreateWithUTF8CString("stack");
+    JSValueRef st = obj ? JSObjectGetProperty(JABC_CONTEXT, obj, key, NULL) : NULL;
+    JSStringRelease(key);
+    if (st != NULL && !JSValueIsUndefined(JABC_CONTEXT, st)) {
+      JSStringRef ss = JSValueToStringCopy(JABC_CONTEXT, st, NULL);
+      if (ss != NULL) {
+        char sp[PAGESIZE];
+        JSStringGetUTF8CString(ss, sp, PAGESIZE);
+        JSStringRelease(ss);
+        fprintf(stderr, "%s\n", sp);
+      }
+    }
+  }
+#endif
 }
 
 void JABCExecute(const char* script) {
@@ -87,9 +107,17 @@ static b8 JABCRun(const char* script) {
                         JSOfCString(script), kJSPropertyAttributeNone, NULL);
     JSStringRelease(k);
   }
+#ifndef NDEBUG
+  //  Debug build: append the Error's `.stack` to the reported text (leaks JSC
+  //  source state on teardown — js/lsan.supp covers it — worth it for a trace).
+  static const char WRAP[] =
+      "(function(){try{(0,eval)(__src);return null;}"
+      "catch(e){return String(e)+(e&&e.stack?'\\n'+e.stack:'');}})()";
+#else
   static const char WRAP[] =
       "(function(){try{(0,eval)(__src);return null;}"
       "catch(e){return String(e);}})()";
+#endif
   JSStringRef code = JSStringCreateWithUTF8CString(WRAP);
   JSValueRef exception = NULL;
   JSValueRef r =

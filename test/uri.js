@@ -46,4 +46,29 @@ function eq(a, b, m) { if (a !== b) fail(m + ": '" + a + "' !== '" + b + "'"); }
 eq(URI.make("http", "ex.com", "/p", "q=1", "f"), "http:ex.com/p?q=1#f", "make");
 eq(URI.unescape(URI.escape("a b/c")), "a b/c", "escape roundtrip");
 
+// URI-009 (make side): absent (undefined) omits the sigil; present-empty
+// ("") emits a bare `?`/`#` — make is the exact inverse of _parse.
+{
+  eq(URI.make(undefined, undefined, "dog/DOG.h", undefined, undefined),
+     "dog/DOG.h", "absent q+f -> no ?#");
+  eq(URI.make(undefined, undefined, "dog/DOG.h", undefined, "L5"),
+     "dog/DOG.h#L5", "absent query + present frag -> #L5, no ?");
+  eq(URI.make(undefined, undefined, "dog/DOG.h", "", undefined),
+     "dog/DOG.h?", "present-empty query -> bare ?");
+  eq(URI.make(undefined, undefined, undefined, "b", ""), "?b#",
+     "present-empty fragment -> trailing #");
+}
+
+// parse -> make round-trip: every shape composes back byte-identical.
+{
+  const rts = ["dog/DOG.h", "dog/DOG.h?main", "dog/DOG.h#L5",
+               "dog/DOG.h?main#L5", "//DIS-060/dog?main", "?feat", "#L5",
+               "a?", "a#", "a?#b", "file:/home/x/.be?/dogs/main#msg"];
+  for (const s of rts) {
+    const u = new URI(s);
+    eq(URI.make(u.scheme, u.authority, u.path, u.query, u.fragment), s,
+       "round-trip " + s);
+  }
+}
+
 io.log("uri.js OK");
