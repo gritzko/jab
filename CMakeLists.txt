@@ -115,5 +115,7 @@ add_test(NAME JABCleakLoop
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCzip JABCulogLib JABCstore JABCargv JABCrequireBe PROPERTIES
+# JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
+# dropped from this unconditional list so configure does not abort without be/.
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCzip JABCargv JABCrequireBe PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
