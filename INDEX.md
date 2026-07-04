@@ -83,6 +83,15 @@ Pure marshalling over dog/git: the offset-addressed pack core, the delta op, the
  -  `_git_tree_next(bytes, off)` — drain ONE tree entry → `{mode,nameStart,nameEnd,sha,nextOff}`, backing `git.tree`.
  -  `_git_parse_commit(bytes)` — over `GITu8sDrainCommit`+`GITu8sCommitTree` → the `git.parseCommit` object.
 
+###  ulog.hpp — ULOG binding over dog/ULOG (offset codec + booked log)
+
+The stateless row codec over a JS `Uint8Array` (the `abc.ram("ULOG")` cursor family) PLUS the native file-backed log leaves (booked mmap + `wh128` sidecar index), whose (data, idx) pair is boxed on the heap and handed back as a Number handle (ULOG-002/001, approach-(a) prep).
+
+ -  `_ulog_feed`/`_ulog_next`/`_ulog_now` — stateless append / row-end / fresh monotonic `ron60`, over a JS buffer at an offset.
+ -  `_ulog_time`/`_ulog_verb`/`_ulog_uri` + `_ulog_seek{Verb,Time,URI}` — per-row fields and the six offset-pure forward/reverse seeks.
+ -  `_ulog_open(path)`→handle / `_ulog_close(handle)` — `ULOGOpen`/`ULOGClose` a booked log; close trims to PAST+DATA (drops the zero pad) and frees the box.
+ -  `_ulog_append(handle, ts, verb, uri)` — `ULOGAppendAt` (arg order = the on-disk row `<ts>\t<verb>\t<uri>`), ts-preserving + monotonic (stale ts → ULOGCLOCK throw); `_ulog_count`/`_ulog_rowUri`/`_ulog_rowTime` read back rows.
+
 ###  weave.hpp — WEAVE binding over dog/WEAVE
 
 A WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call; commit ids cross as 16-char hex hashlet strings (all u64↔hex in the leaf).

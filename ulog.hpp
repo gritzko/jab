@@ -11,6 +11,7 @@
 #include "cont.hpp"
 
 extern "C" {
+#include "abc/PATH.h"
 #include "abc/RON.h"
 //  dog/ULOG.h pulls abc/ANSI.h, which uses `private` as a struct field name
 //  (valid C, a reserved word in C++).  Rename it across the include — we
@@ -221,8 +222,131 @@ static JABC_FN(JABCulogSeekURI) {
   ULOG_SEEK_RET(JABCulogScan(c[0], off, dl, rev, 2, 0, 0, ps[0], (size_t)$len(ps)));
 }
 
+//  --- booked-log + sidecar-index bindings (approach-(a) prep) ----------
+//  ULOGOpen/AppendAt/Close operate on the native file-backed ULOG (a booked
+//  mmap `data` + a `wh128` sidecar `idx`), unlike the stateless _ulog_feed
+//  above which works over a JS-owned Uint8Array.  The (data, idx) pair must
+//  survive across JS calls, so box it on the heap and hand its pointer back
+//  as a JS Number handle.  Close frees the box (idempotent — nulls handle).
+typedef struct { u8bp data; wh128bp idx; } jabc_ulog;
+
+//  Read a NUL-terminated path8s from a JS string/bytes arg into `pad`.
+static b8 JABCulogPath(u8s pad, u8* tmp, size_t cap, JSContextRef ctx,
+                       JSValueRef v, JSValueRef* ex) {
+  u8s p = {};
+  if (!JABCArgU8(p, ctx, v, tmp, cap, ex)) return NO;
+  size_t n = (size_t)(p[1] - p[0]);
+  if (n + 1 >= cap) return NO;
+  if (n) memcpy(pad[0], p[0], n);
+  pad[0][n] = 0;                       // ULOG paths are NUL-terminated
+  pad[1] = pad[0] + n + 1;
+  return YES;
+}
+
+//  _ulog_open(path) -> Number handle (throws on open failure).
+static JABC_FN(JABCulogOpen) {
+  if (argc < 1) JABC_THROW("ulog._open(path)");
+  u8 pb[FILE_PATH_MAX_LEN];
+  u8s pad = {pb, pb + sizeof(pb)};
+  if (!JABCulogPath(pad, pb, sizeof(pb), ctx, args[0], exception))
+    return JSValueMakeUndefined(ctx);
+  path8s path = {pad[0], pad[1]};
+  jabc_ulog* h = (jabc_ulog*)calloc(1, sizeof(jabc_ulog));
+  if (!h) JABC_THROW("ulog._open: oom");
+  ok64 o = ULOGOpen(&h->data, &h->idx, path);
+  if (o != OK) { free(h); JABC_THROW("ulog._open failed"); }
+  return JSValueMakeNumber(ctx, (double)(size_t)h);
+}
+
+static jabc_ulog* JABCulogHandle(JSContextRef ctx, JSValueRef v,
+                                 JSValueRef* ex) {
+  double d = JSValueToNumber(ctx, v, ex);
+  if (*ex || d <= 0) return NULL;
+  return (jabc_ulog*)(size_t)d;
+}
+
+//  _ulog_append(handle, ts, verb, uri) -> ts written (throws ULOGCLOCK).
+//  Arg order = the on-disk row `<ts>\t<verb>\t<uri>`; ts written as-is.
+static JABC_FN(JABCulogAppend) {
+  if (argc < 4) JABC_THROW("ulog._append(handle, ts, verb, uri)");
+  jabc_ulog* h = JABCulogHandle(ctx, args[0], exception);
+  if (!h) JABC_THROW("ulog._append: bad handle");
+  u64 ts = JSValueToUInt64(ctx, args[1], exception);
+  u8 vb[16], ub[FILE_PATH_MAX_LEN];
+  u8s vs = {}, us = {};
+  if (!JABCArgU8(vs, ctx, args[2], vb, sizeof(vb), exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCArgU8(us, ctx, args[3], ub, sizeof(ub), exception)) return JSValueMakeUndefined(ctx);
+  ron60 verb = 0;
+  u8cs vsc = {vs[0], vs[1]};
+  RONutf8sDrain(&verb, vsc);
+  ulogrec rec = {};
+  rec.ts = (ron60)ts;
+  rec.verb = verb;
+  rec.uri.data[0] = us[0];
+  rec.uri.data[1] = us[1];
+  URILexer(&rec.uri);
+  if (ULOGAppendAt(h->data, h->idx, &rec) != OK) JABC_THROW("ulog._append (clock/full?)");
+  return JSBigIntCreateWithUInt64(ctx, (uint64_t)rec.ts, exception);
+}
+
+//  _ulog_count(handle) -> Number of rows.
+static JABC_FN(JABCulogCount) {
+  if (argc < 1) JABC_THROW("ulog._count(handle)");
+  jabc_ulog* h = JABCulogHandle(ctx, args[0], exception);
+  if (!h) JABC_THROW("ulog._count: bad handle");
+  return JSValueMakeNumber(ctx, (double)ULOGCount(h->idx));
+}
+
+//  _ulog_rowUri(handle, i) -> String (round-trip verification helper).
+static JABC_FN(JABCulogRowUri) {
+  if (argc < 2) JABC_THROW("ulog._rowUri(handle, i)");
+  jabc_ulog* h = JABCulogHandle(ctx, args[0], exception);
+  if (!h) JABC_THROW("ulog._rowUri: bad handle");
+  u32 i = (u32)JSValueToNumber(ctx, args[1], exception);
+  ulogrec rec = {};
+  if (ULOGRow(h->data, h->idx, i, &rec) != OK) return JSValueMakeUndefined(ctx);
+  u8 ub[2048];
+  size_t n = JABCulogUriText(ub, sizeof(ub), &rec);
+  char tmp[2048];
+  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
+  if (n) memcpy(tmp, ub, n);
+  tmp[n] = 0;
+  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
+  JSValueRef v = JSValueMakeString(ctx, js);
+  JSStringRelease(js);
+  return v;
+}
+
+//  _ulog_rowTime(handle, i) -> BigInt ts (round-trip verification helper).
+static JABC_FN(JABCulogRowTime) {
+  if (argc < 2) JABC_THROW("ulog._rowTime(handle, i)");
+  jabc_ulog* h = JABCulogHandle(ctx, args[0], exception);
+  if (!h) JABC_THROW("ulog._rowTime: bad handle");
+  u32 i = (u32)JSValueToNumber(ctx, args[1], exception);
+  ulogrec rec = {};
+  if (ULOGRow(h->data, h->idx, i, &rec) != OK) return JSValueMakeUndefined(ctx);
+  return JSBigIntCreateWithUInt64(ctx, (uint64_t)rec.ts, exception);
+}
+
+//  _ulog_close(handle) -> undefined.  Trims to PAST+DATA, flushes the
+//  sidecar sentinel, unmaps, frees the box.
+static JABC_FN(JABCulogClose) {
+  if (argc < 1) JABC_THROW("ulog._close(handle)");
+  jabc_ulog* h = JABCulogHandle(ctx, args[0], exception);
+  if (!h) JABC_THROW("ulog._close: bad handle");
+  ULOGClose(h->data, &h->idx, YES);
+  free(h);
+  return JSValueMakeUndefined(ctx);
+}
+
 static inline void JABCUlogInstall(JSObjectRef o) {
   JABC_API_FN(o, "_ulog_feed", JABCulogFeed);
+  JABC_API_FN(o, "_ulog_open", JABCulogOpen);
+  JABC_API_FN(o, "_ulog_append", JABCulogAppend);
+  JABC_API_FN(o, "_ulog_count", JABCulogCount);
+  JABC_API_FN(o, "_ulog_rowUri", JABCulogRowUri);
+  JABC_API_FN(o, "_ulog_rowTime", JABCulogRowTime);
+  JABC_API_FN(o, "_ulog_close", JABCulogClose);
   JABC_API_FN(o, "_ulog_now", JABCulogNow);
   JABC_API_FN(o, "_ulog_next", JABCulogNext);
   JABC_API_FN(o, "_ulog_time", JABCulogTime);

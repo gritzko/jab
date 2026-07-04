@@ -68,6 +68,8 @@ add_test(NAME JABCpack COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/pack.js)
 add_test(NAME JABCpackidx COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/packidx.js)
 add_test(NAME JABCgit COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/git.js)
 add_test(NAME JABCulog COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ulog.js)
+# ULOG-002/001: native ULOGOpen/AppendAt/Close bindings (booked log + sidecar).
+add_test(NAME JABCulogBook COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ulog_book.js)
 add_test(NAME JABCweave COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/weave.js)
 add_test(NAME JABCansi COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ansi.js)
 add_test(NAME JABCconsole COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/console.js)
@@ -117,5 +119,5 @@ add_test(NAME JABCleakLoop
 # but are not our leaks; suppress JSC-internal allocations by library name.
 # JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
 # dropped from this unconditional list so configure does not abort without be/.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCzip JABCargv JABCrequireBe PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCulogBook JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCzip JABCargv JABCrequireBe PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
