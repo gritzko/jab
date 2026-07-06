@@ -1,12 +1,12 @@
 #   JABC: JavaScriptCore bindings
 
 <img align=right width="25%" src="./logo.jpg"/>
+
 There is quite a selection of JavaScript environments these days:
-[node.js][n], 
-[Deno][d], 
-[Bun][b], 
-[Bare][r], 
-and so on. The top issue with node-like
+[node.js][n], [Deno][d], [Bun][b], [Bare][r], 
+and so on. My immediate goal was to write extensions and scripts
+for a revision control system, but all contenders turned out 
+overweight, or worse. The top issue with node-like
 environments is *bloat*. What should be a simple scripting language
 gradually became an elephantine monstrosity. Can we try to work
 around the underlying forces that cause bloat? Why does it happen,
@@ -34,48 +34,26 @@ We will try to compact that into three layers:
  3. the POSIX layer.
 
 Essentially, the bindings become the glue in between the layers.
-They hold no memory, use no special programming language,
-and so on. The particular solutions used are listed below.
+In the library layer, there are:
 
- 1. Use the stock libjavascriptcore, do not bundle your own.
-    Linuses and Apples all have it. Do not make the Electron
-    mistake. Building and shipping your own copy is a lot of
-    work and a lot of overhead. Advanced users would likely
-    make their own build anyway.
- 2. `poll()` is probably enough. As a historical note, I was 
-    using a [node.js-like technology][7] almost a year before
-    node.js was released in 2009. I needed it to crawl large
-    BitTorrent swarms for scientific purposes. For thousands
-    of low-traffic connections that was really necessary.
-    The perceived need to manage more than a thousand conns 
-    per a thread requires the use of platform-specific APIs.
-    The resulting `libuv` layer allocates and tries to manage 
-    buffers, being unable to track their entire life cycle.
-    That is a source of many problems. Also, our `poll()` use is
-    covered by a C sugar wrapper, so `epoll()` is no biggie.
- 3. Do not toss buffers across layers. That is a safety hazard
-    and voids the warranty on your layers. In 2025, JavaScript
-    has ArrayBuffer/TypedArrays. In 2009 it had not. We can
-    let JavaScript manage the buffers, no shared custody.
- 4. Minimize the number of JS object references held in the
-    C land to the minimum: only keep the bootstrap points.
-    Do not stash the callbacks, values and suchlike.
-    This clear separation between layers improves many things,
-    including security. Also, avoid pointer-holding in JS.
- 5. Running threads for disk reads the `libuv` way is likely
-    no longer necessary. `libuv` quotes Arvid Norberg on that. 
-    Again, that was the 2008/2010 era and Arvid authored a
-    high-performance low-overhead BitTorrent client. People
-    had HDDs back in those days. These days we all have NVMe 
-    and our data quite likely fits in memory anyway.
- 6. Because of the latter fact, let JavaScript use `mmap()`.
-    Asynchrony in file system access is a huge stumble point.
- 7. The UTF8/UTF16 mismatch is a pain.
+  - libabc for low-level system things:
+     1. buffers, 
+     2. mmap, 
+     3. network,
+     4. files,
+     5. poll loops,
+     6. etc.
+  - libdog for revision control related things:
+     1. tokenizers, 
+     2. git compatibility toolkit,
+     3. diff and merge algorithms,
+     4. the tokenized hunk format.
 
- This list will be appended as the story develops.
+On top of that, all the revision control machinery is being built.
+
 
 [7]: http://github.com/gritzko/k7
-[n]:
-[d]:
-[b]:
-[r];
+[n]: https://nodejs.org/en
+[d]: https://deno.com/
+[b]: https://bun.com/
+[r]: https://bare.pears.com/

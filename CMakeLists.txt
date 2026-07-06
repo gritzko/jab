@@ -1,4 +1,24 @@
-enable_language(CXX)
+cmake_minimum_required(VERSION 3.20)
+project(jabc C CXX)
+
+#  JAB-005: dual-mode — standalone repo root (own abc/ + dog/ submodules) or
+#  beagle's js/ subdir (the sibling abc/ + dog/ already provide the targets).
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_C_STANDARD 23)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
+    set(CMAKE_EXPORT_COMPILE_COMMANDS on)
+    set(DOG_BIN_DIR ${CMAKE_BINARY_DIR}/bin)
+    include(CTest)
+    set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/abc)
+else()
+    set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../abc)
+endif()
+if (NOT TARGET abc-core)
+    add_subdirectory(abc)
+endif()
+if (NOT TARGET dog)
+    add_subdirectory(dog)
+endif()
 
 if(APPLE)
     find_library(JSC_LIB JavaScriptCore)
@@ -30,7 +50,7 @@ include_directories(
 # abc/POL.c (pol) and NET/TCP/UDP.c (net/dgram) are stripped from abc-core
 # (grouped with CURL); compile them straight into jab for the socket/loop leaves.
 set(JABC_SRC main.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp
-    pol.cpp ../abc/POL.c net.cpp ../abc/NET.c ../abc/TCP.c ../abc/UDP.c)
+    pol.cpp ${ABC_DIR}/POL.c net.cpp ${ABC_DIR}/NET.c ${ABC_DIR}/TCP.c ${ABC_DIR}/UDP.c)
 
 # JAB-001: the runtime binary is `jab` — a standalone runner divorced from `be`
 # (internal JABC* C++ symbols + add_test names stay).
@@ -77,7 +97,12 @@ add_test(NAME JABCtty COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/tty.js)
 add_test(NAME JABCpol COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/pol.js)
 add_test(NAME JABCnet COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/net.js)
 # JS-035: top-level test/js dir (not js-local), so ${CMAKE_SOURCE_DIR}.
-add_test(NAME JABCzip COMMAND jab ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
+# JAB-005: beagle-owned test file — absent standalone, so existence-gated.
+if(EXISTS ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
+    add_test(NAME JABCzip COMMAND jab ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
+    set_tests_properties(JABCzip PROPERTIES
+        ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
+endif()
 # JS-048: bin/lib/ulog.js (ULOG read+write: drain readers + crash-safe
 # monotonic appender) + bin/lib/store.js (object + ref read+write: ref
 # resolve readers + createShard/set/tombstone writers), pure-JS unit tests
@@ -119,5 +144,5 @@ add_test(NAME JABCleakLoop
 # but are not our leaks; suppress JSC-internal allocations by library name.
 # JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
 # dropped from this unconditional list so configure does not abort without be/.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCulogBook JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCzip JABCargv JABCrequireBe PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCulogBook JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCargv JABCrequireBe PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")

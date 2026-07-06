@@ -17,7 +17,7 @@ extern "C" {
 thread_local JSGlobalContextRef JABC_CONTEXT;
 thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 u8 _pro_depth = 0;
-extern "C" _Thread_local u8* ABC_BASS[4] = {};
+extern "C" thread_local u8* ABC_BASS[4] = {};
 
 static int failures = 0;
 

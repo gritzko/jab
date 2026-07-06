@@ -24,7 +24,7 @@ thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 
 //  PRO.h globals (one definition for the whole binary).
 u8 _pro_depth = 0;
-extern "C" _Thread_local u8* ABC_BASS[4] = {};
+extern "C" thread_local u8* ABC_BASS[4] = {};
 
 static void JSInit() {
   JABC_CONTEXT = JSGlobalContextCreate(NULL);
