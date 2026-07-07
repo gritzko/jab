@@ -3,8 +3,8 @@
 #include <cstring>
 
 #include "JABC.hpp"
+#include "pro.hpp"
 extern "C" {
-#include "abc/PRO.h"
 #include "dog/VERSN.h"   // process.version / .build / .build_date
 }
 
@@ -23,8 +23,9 @@ thread_local JSGlobalContextRef JABC_CONTEXT;
 thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 
 //  PRO.h globals (one definition for the whole binary).
+//  __thread, not thread_local: C-style TLS links from C on Darwin (pro.hpp).
 u8 _pro_depth = 0;
-extern "C" thread_local u8* ABC_BASS[4] = {};
+extern "C" __thread u8* ABC_BASS[4] = {};
 
 static void JSInit() {
   JABC_CONTEXT = JSGlobalContextCreate(NULL);

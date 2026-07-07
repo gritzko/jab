@@ -1,7 +1,5 @@
 #include "JABC.hpp"
-extern "C" {
-#include "abc/PRO.h"  //  HASHx uses sane/done; provided by the .cpp, not the header (§6)
-}
+#include "pro.hpp"  //  HASHx uses sane/done; provided by the .cpp, not the header (§6)
 #include "hash.hpp"
 #include "heap.hpp"
 #include "hit.hpp"

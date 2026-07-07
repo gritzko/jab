@@ -1,21 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(jabc C CXX)
 
-#  JAB-005: dual-mode — standalone repo root (own abc/ + dog/ submodules) or
-#  beagle's js/ subdir (the sibling abc/ + dog/ already provide the targets).
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(CMAKE_C_STANDARD 23)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
-    set(CMAKE_EXPORT_COMPILE_COMMANDS on)
-    set(DOG_BIN_DIR ${CMAKE_BINARY_DIR}/bin)
-    include(CTest)
-    set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/abc)
-else()
-    set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../abc)
-endif()
-if (NOT TARGET abc-core)
-    add_subdirectory(abc)
-endif()
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
+set(CMAKE_EXPORT_COMPILE_COMMANDS on)
+set(DOG_BIN_DIR ${CMAKE_BINARY_DIR}/bin)
+include(CTest)
+
+#  JAB-005: abc is NESTED in the dog submodule; dog's guarded
+#  add_subdirectory(abc) provides abc-core, `-Idog` resolves "abc/...".
+set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dog/abc)
 if (NOT TARGET dog)
     add_subdirectory(dog)
 endif()
@@ -39,10 +33,14 @@ if(NOT JSC_LIB)
     return()
 endif()
 
+# SODIUM_INCLUDE_DIR is cached by dog/abc's find_path; jab TUs reach sodium
+# headers via ABC.h -> NACL.h, and /opt/homebrew/include is not a default
+# search path on arm64 macOS.
 include_directories(
     ${JSC_INCLUDE_DIR}
-    ..
+    ${SODIUM_INCLUDE_DIR}
     .
+    dog
 )
 
 # The JS Buf class is embedded in buf.cpp as a raw string literal; no js2c /

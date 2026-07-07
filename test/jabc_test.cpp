@@ -10,14 +10,13 @@
 #include <unistd.h>
 
 #include "JABC.hpp"
-extern "C" {
-#include "abc/PRO.h"
-}
+#include "pro.hpp"
 
 thread_local JSGlobalContextRef JABC_CONTEXT;
 thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 u8 _pro_depth = 0;
-extern "C" thread_local u8* ABC_BASS[4] = {};
+//  __thread, not thread_local: C-style TLS links from C on Darwin (pro.hpp).
+extern "C" __thread u8* ABC_BASS[4] = {};
 
 static int failures = 0;
 

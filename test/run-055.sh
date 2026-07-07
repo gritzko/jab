@@ -13,6 +13,9 @@ JAB="$1"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+#  macOS $TMPDIR sits behind the /var -> /private/var symlink; jab realpaths
+#  the entry (Node patches argv[1] the same way), so expect the physical path.
+WORK="$(cd "$WORK" && pwd -P)"
 
 #  Layout: $WORK/be/greet.js + $WORK/be/lib/u.js ; run from $WORK/sub/deep.
 mkdir -p "$WORK/be/lib" "$WORK/sub/deep"
