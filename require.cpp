@@ -31,29 +31,46 @@ static const char* JABC_REQUIRE_JS = R"JS(
   function isFile(p) {
     try { return io.stat(p).kind === "reg"; } catch (e) { return false; }
   }
+  function isDir(p) {
+    try { return io.stat(p).kind === "dir"; } catch (e) { return false; }
+  }
   //  JAB-001: a bareword (no /, ./, ../) is NOT path-relative — it resolves
   //  by scanning UP for `./be ../be …`, trying <be>/<name> then <name>.js in
-  //  each.  Ceiling: $HOME/be (under $HOME) else /be.  The scan starts at
-  //  `from` — the REQUIRING script's dir for a require() (so `require("lib/
-  //  x.js")` finds the be/ shard nearest the script, cwd-independent and free
-  //  of the cwd wrong-copy hazard); cwd for a bareword ENTRY (no requirer).
+  //  each.  Ceiling: $HOME/be (under $HOME) else /be.
+  //  GET-041: the be-CLIMB runs ONCE — at the first be-lookup (startup) — and
+  //  its result is FROZEN as an array of absolute be/ dir paths (symlinks kept
+  //  verbatim: the `$HOME/be -> …/be` locator stays a locator).  Every bareword
+  //  then resolves against that fixed array, so a `jab get` re-scanning per
+  //  require can never wander into a tree it is mid-writing.  Explicit ./ ../
+  //  paths never touch the array — resolve() keeps them relative to the
+  //  requiring script's own dir.
   function isExplicit(spec) {
     return spec[0] === "/" || spec.slice(0, 2) === "./" ||
            spec.slice(0, 3) === "../";
   }
-  function resolveBe(spec, from) {
-    const start = from || io.cwd();
+  let beStack = null;                          // frozen once, at startup
+  function pinBeStack(start) {
+    const abs = normalize(start[0] === "/" ? start : io.cwd() + "/" + start);
     const home = io.getenv("HOME");
     const ceil = home ? normalize(home) : "/";
-    let dir = normalize(start);
+    let dir = abs;
+    const out = [];
     while (true) {
       const be = dir + "/be";
-      for (const c of [be + "/" + spec, be + "/" + spec + ".js"])
-        if (isFile(c)) return c;
+      if (isDir(be)) out.push(be);
       if (dir === ceil || dir === "/") break;
       dir = dirname(dir);
     }
-    throw "require: cannot find 'be/" + spec + "' from '" + start + "'";
+    beStack = out;
+    return out;
+  }
+  function resolveBe(spec, from) {
+    const stack = beStack || pinBeStack(from || io.cwd());
+    for (const be of stack)
+      for (const c of [be + "/" + spec, be + "/" + spec + ".js"])
+        if (isFile(c)) return c;
+    throw "require: cannot find 'be/" + spec + "' from '" +
+          (from || io.cwd()) + "'";
   }
   function resolve(spec, baseDir) {
     if (!isExplicit(spec)) return resolveBe(spec, baseDir);
