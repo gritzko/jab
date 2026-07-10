@@ -48,20 +48,20 @@ function writeFile(path, text) {
   if (!threw) fail("missing module not rejected");
 }
 
-// JAB-001: a BAREWORD (no /, ./, ../ prefix) resolves via the upward `be/`
-// scan from the REQUIRING FILE's own dir (not cwd) — try <be>/<name> then
-// <be>/<name>.js.  Plant <d>/be/<name>.js next to a requiring module
+// JAB-001: a BAREWORD (no /, ./, ../ prefix) resolves via the upward `jsrc/`
+// scan from the REQUIRING FILE's own dir (not cwd) — try <jsrc>/<name> then
+// <jsrc>/<name>.js.  Plant <d>/jsrc/<name>.js next to a requiring module
 // <d>/main.js and require THAT, so the scan origin is the module's dir.
 {
-  const d = "/tmp/jabc_req_be_" + Date.now();
-  io.mkdir(d); io.mkdir(d + "/be");
-  writeFile(d + "/be/jab_req_be.js", "module.exports = { be: 1 };");
+  const d = "/tmp/jabc_req_jsrc_" + Date.now();
+  io.mkdir(d); io.mkdir(d + "/jsrc");
+  writeFile(d + "/jsrc/jab_req_jsrc.js", "module.exports = { jsrc: 1 };");
   writeFile(d + "/main.js",
-    "module.exports = [require('jab_req_be').be, require('jab_req_be.js').be];");
+    "module.exports = [require('jab_req_jsrc').jsrc, require('jab_req_jsrc.js').jsrc];");
   const got = require(d + "/main.js");
-  eq(got[0], 1, "bareword be/-scan from requiring dir (with .js)");
-  eq(got[1], 1, "bareword be/-scan from requiring dir (explicit .js)");
-  io.unlink(d + "/be/jab_req_be.js");
+  eq(got[0], 1, "bareword jsrc/-scan from requiring dir (with .js)");
+  eq(got[1], 1, "bareword jsrc/-scan from requiring dir (explicit .js)");
+  io.unlink(d + "/jsrc/jab_req_jsrc.js");
   writeFile(d + "/miss.js",
     "let t=false; try{require('jab_req_no_such');}catch(e){t=true;} module.exports=t;");
   if (require(d + "/miss.js") !== true) fail("missing bareword not rejected");

@@ -35,11 +35,11 @@ static const char* JABC_REQUIRE_JS = R"JS(
     try { return io.stat(p).kind === "dir"; } catch (e) { return false; }
   }
   //  JAB-001: a bareword (no /, ./, ../) is NOT path-relative — it resolves
-  //  by scanning UP for `./be ../be …`, trying <be>/<name> then <name>.js in
-  //  each.  Ceiling: $HOME/be (under $HOME) else /be.
-  //  GET-041: the be-CLIMB runs ONCE — at the first be-lookup (startup) — and
-  //  its result is FROZEN as an array of absolute be/ dir paths (symlinks kept
-  //  verbatim: the `$HOME/be -> …/be` locator stays a locator).  Every bareword
+  //  by scanning UP for `./jsrc ../jsrc …`, trying <jsrc>/<name> then
+  //  <name>.js in each.  Ceiling: $HOME/jsrc (under $HOME) else /jsrc.
+  //  GET-041: the jsrc-CLIMB runs ONCE — at the first lookup (startup) — and
+  //  its result is FROZEN as an array of absolute jsrc/ dir paths (symlinks
+  //  kept verbatim: a `$HOME/jsrc -> …` locator stays a locator).  Every bareword
   //  then resolves against that fixed array, so a `jab get` re-scanning per
   //  require can never wander into a tree it is mid-writing.  Explicit ./ ../
   //  paths never touch the array — resolve() keeps them relative to the
@@ -48,32 +48,32 @@ static const char* JABC_REQUIRE_JS = R"JS(
     return spec[0] === "/" || spec.slice(0, 2) === "./" ||
            spec.slice(0, 3) === "../";
   }
-  let beStack = null;                          // frozen once, at startup
-  function pinBeStack(start) {
+  let jsrcStack = null;                        // frozen once, at startup
+  function pinJsrcStack(start) {
     const abs = normalize(start[0] === "/" ? start : io.cwd() + "/" + start);
     const home = io.getenv("HOME");
     const ceil = home ? normalize(home) : "/";
     let dir = abs;
     const out = [];
     while (true) {
-      const be = dir + "/be";
-      if (isDir(be)) out.push(be);
+      const jsrc = dir + "/jsrc";
+      if (isDir(jsrc)) out.push(jsrc);
       if (dir === ceil || dir === "/") break;
       dir = dirname(dir);
     }
-    beStack = out;
+    jsrcStack = out;
     return out;
   }
-  function resolveBe(spec, from) {
-    const stack = beStack || pinBeStack(from || io.cwd());
-    for (const be of stack)
-      for (const c of [be + "/" + spec, be + "/" + spec + ".js"])
+  function resolveJsrc(spec, from) {
+    const stack = jsrcStack || pinJsrcStack(from || io.cwd());
+    for (const jsrc of stack)
+      for (const c of [jsrc + "/" + spec, jsrc + "/" + spec + ".js"])
         if (isFile(c)) return c;
-    throw "require: cannot find 'be/" + spec + "' from '" +
+    throw "require: cannot find 'jsrc/" + spec + "' from '" +
           (from || io.cwd()) + "'";
   }
   function resolve(spec, baseDir) {
-    if (!isExplicit(spec)) return resolveBe(spec, baseDir);
+    if (!isExplicit(spec)) return resolveJsrc(spec, baseDir);
     let base = normalize(spec[0] === "/" ? spec : baseDir + "/" + spec);
     for (const c of [base, base + ".js", base + "/index.js"])
       if (isFile(c)) return c;
@@ -111,24 +111,24 @@ static const char* JABC_REQUIRE_JS = R"JS(
     g.require = makeRequire(dirname(abs));
   };
 
-  //  JAB: a bare/relative `.js` ENTRY (`jab foo.js`, `jab be/main.js`) — NOT an
-  //  explicit path (main.cpp runs /,./,../ directly via global eval).  Resolve
-  //  it via the upward be/-scan, pin it as argv[1], and load it as the program.
+  //  JAB: a bare/relative `.js` ENTRY (`jab foo.js`, `jab jsrc/main.js`) — NOT
+  //  an explicit path (main.cpp runs /,./,../ directly via global eval).  Resolve
+  //  it via the upward jsrc/-scan, pin it as argv[1], and load it as the program.
   g.__runScript = function (spec) {
-    const abs = resolveBe(spec);
+    const abs = resolveJsrc(spec);
     if (g.process && g.process.argv) g.process.argv[1] = abs;
     return load(abs, dirname(abs));
   };
 
   //  JAB: the DEFAULT entry — any first arg that is NOT a `.js` file (a verb, a
   //  `scheme:` URI, a non-.js path) and the no-arg `jab` route here (main.cpp
-  //  decides via the `.js` suffix and calls __main()).  Resolve be/main.js by
-  //  the same upward be/-scan, splice it in as argv[1] (so main.js's
-  //  process.argv[1] is its OWN be/-root path — core/loop.js derives `_here`
+  //  decides via the `.js` suffix and calls __main()).  Resolve jsrc/main.js by
+  //  the same upward jsrc/-scan, splice it in as argv[1] (so main.js's
+  //  process.argv[1] is its OWN jsrc/-root path — core/loop.js derives `_here`
   //  from it — and the user's tokens stay at argv[2:] AS-IS, the cli contract:
   //  verb=argv[2]), then run it; main.js (the resident loop) triages the rest.
   g.__main = function () {
-    const abs = resolveBe("main.js");
+    const abs = resolveJsrc("main.js");
     const av = g.process && g.process.argv;
     if (av) g.process.argv = [av[0], abs].concat(av.slice(1));
     return load(abs, dirname(abs));

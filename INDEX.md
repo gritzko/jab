@@ -1,6 +1,6 @@
 #   js — JABC (JavaScriptCore bindings) module index
 
-JABC is a thin, anti-bloat JavaScriptCore binding over stock `libjavascriptcore`: it holds no memory and no long-lived JS refs (rule #4). Only buffers (JS-owned `Uint8Array`s in a `Buf` cursor) and fds (`number`s) cross the boundary. The native layer is leaf-only (syscalls, fills, mmap); all cursor/format logic lives in JS. `WITH_JS` is ON by default and the runtime binary `jab` (JAB-001: renamed from `jabc`, divorced from `be`) is built into `${DOG_BIN_DIR}`; `jab <name>` resolves a script via its own upward `be/`-scan (scripts live in the `be/` submodule). See [README.md]/[API.md]; loops in [POL.md]/[NET.md].
+JABC is a thin, anti-bloat JavaScriptCore binding over stock `libjavascriptcore`: it holds no memory and no long-lived JS refs (rule #4). Only buffers (JS-owned `Uint8Array`s in a `Buf` cursor) and fds (`number`s) cross the boundary. The native layer is leaf-only (syscalls, fills, mmap); all cursor/format logic lives in JS. `WITH_JS` is ON by default and the runtime binary `jab` (JAB-001: renamed from `jabc`, divorced from `be`) is built into `${DOG_BIN_DIR}`; `jab <name>` resolves a script via its own upward `jsrc/`-scan (scripts live in `jsrc/` dirs). See [README.md]/[API.md]; loops in [POL.md]/[NET.md].
 
 ###  JABC.hpp — binding macros + shared decls
 
@@ -171,15 +171,15 @@ Raw-mode + winsize over abc/ANSI's `ANSI*` POSIX wrappers (beside `ANSIBgColor`,
 Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`, `io.stat` to probe) — no engine module loader, no promises.
 
  -  `require(spec)` — resolve → mmap → wrap in a `Function` → eval → cache; inserted BEFORE eval so cycles see partial exports.
- -  `require.resolve`/`require.cache` — explicit path (`/`,`./`,`../`) resolves `.js`/`/index.js`; a BAREWORD scans UP for `be/` (try `<be>/<name>`,`<name>.js`; ceiling `$HOME/be` else `/be`). By-abspath cache; each module's `require` is bound to its dir.
- -  `__main(spec)` — JAB-001 `jab <bareword>` entry: `resolveBe`, patch `process.argv[1]` to the abspath (the `here` idiom), then load it.
+ -  `require.resolve`/`require.cache` — explicit path (`/`,`./`,`../`) resolves `.js`/`/index.js`; a BAREWORD scans UP for `jsrc/` (try `<jsrc>/<name>`,`<name>.js`; ceiling `$HOME/jsrc` else `/jsrc`). By-abspath cache; each module's `require` is bound to its dir.
+ -  `__main(spec)` — JAB-001 `jab <bareword>` entry: `resolveJsrc`, patch `process.argv[1]` to the abspath (the `here` idiom), then load it.
 
 ###  main.cpp — context, module install, script runner
 
 `main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.  The binary is `jab` (renamed from `jabc`, JAB-001).
 
  -  module install order — utf8 → io → buf → console → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
- -  script entry — JAB-001: an EXPLICIT path (`/`,`./`,`../`) runs the file directly (global eval); a BARE name sets `__mainSpec` and runs `__main` (the require machine, upward `be/`-scan).
+ -  script entry — JAB-001: an EXPLICIT path (`/`,`./`,`../`) runs the file directly (global eval); a BARE name sets `__mainSpec` and runs `__main` (the require machine, upward `jsrc/`-scan).
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jab", script, ...]`).
  -  build stamp — the same `process` carries read-only `version`/`build`/`build_date` from `dog/VERSN` (`JABCProcVersn`); "unknown" off a git checkout.
  -  run + drain — `JABCRun` propagates an uncaught exception to the exit code, then `pol.run(pol.NEVER)` drains the loop (Node-like).

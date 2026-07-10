@@ -499,7 +499,7 @@ process.argv;  // Node-shaped: ["jab", <script path>, ...args]
 Both globals are installed before the script runs; under `--eval` (no script
 file) `args` is empty. They are plain JS-owned strings — the binding keeps no
 reference after bootstrap.  JAB-001: `jab` takes either an explicit path
-(`/`,`./`,`../` — run directly) or a bareword (resolved via the upward `be/`-scan,
+(`/`,`./`,`../` — run directly) or a bareword (resolved via the upward `jsrc/`-scan,
 with `process.argv[1]` patched to the resolved abspath).
 
 ##  Examples

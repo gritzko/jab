@@ -6,7 +6,7 @@
 #  run does NOT.  The fix embeds that suppression in the binary (main.cpp's
 #  __lsan_default_suppressions) so EVERY run is clean.  This test runs WITHOUT
 #  an external suppressions file, so it sees only the embedded one.
-#  Usage: run-064.sh /path/to/jab   (run from a tree with be/ + beagle/ siblings)
+#  Usage: run-064.sh /path/to/jab   (run from a tree with a jsrc/ sibling)
 
 JAB="$1"
 [ -n "$JAB" ] || { echo "usage: run-064.sh <jab>"; exit 2; }
@@ -22,12 +22,12 @@ if "$JAB" --eval '0' 2>&1 | grep -q "$LEAK"; then
   exit 0
 fi
 
-#  Repro: a bareword run drives the resident be/ loop (here `ls:` of a tmp dir).
-#  It must exit leak-free.  Resolve be/ from a fresh cwd that sits beside the
-#  be/ shard: ../../../be relative to this script (js/test/ -> beagle -> sibling).
+#  Repro: a bareword run drives the resident jsrc/ loop (here `ls:` of a tmp dir).
+#  It must exit leak-free.  Resolve jsrc/ from a fresh cwd that sits beside the
+#  jsrc/ shard: ../../../jsrc relative to this script (js/test/ -> beagle -> sibling).
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/../../.." && pwd)"       # the dir holding beagle/ + be/ siblings
-[ -d "$ROOT/be" ] || { echo "JS-064 SKIP: no be/ sibling at $ROOT"; exit 0; }
+ROOT="$(cd "$HERE/../../.." && pwd)"       # the dir holding a jsrc/ sibling
+[ -d "$ROOT/jsrc" ] || { echo "JS-064 SKIP: no jsrc/ sibling at $ROOT"; exit 0; }
 
 OUT="$(cd "$ROOT" && "$JAB" ls:. 2>&1)"; RC=$?
 printf '%s\n' "$OUT" | grep -q "$LEAK" && {

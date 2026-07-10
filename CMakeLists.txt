@@ -119,9 +119,9 @@ endif()
 add_test(NAME JABCargv
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-015.sh $<TARGET_FILE:jab>)
 
-# JAB-001: `jab <bareword>` resolves via the upward `be/`-scan and patches
+# JAB-001: `jab <bareword>` resolves via the upward `jsrc/`-scan and patches
 # process.argv[1] (the `here` idiom), distinct from explicit-path direct eval.
-add_test(NAME JABCrequireBe
+add_test(NAME JABCrequireJsrc
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-055.sh $<TARGET_FILE:jab>)
 
 # JS-054: error-exit paths must run the same teardown as success, so a failed
@@ -142,5 +142,5 @@ add_test(NAME JABCleakLoop
 # but are not our leaks; suppress JSC-internal allocations by library name.
 # JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
 # dropped from this unconditional list so configure does not abort without be/.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCulogBook JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCargv JABCrequireBe PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCgit JABCulog JABCulogBook JABCweave JABCansi JABCconsole JABCtty JABCpol JABCnet JABCargv JABCrequireJsrc PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")

@@ -252,7 +252,7 @@ static void JABCInstallArgv(int argc, char** argv, int tail,
 }
 
 //  YES iff `s` ends in the literal ".js" — the script-vs-main entry switch: a
-//  `.js` first arg is a SCRIPT, anything else routes to be/main.js (the loop).
+//  `.js` first arg is a SCRIPT, anything else routes to jsrc/main.js (the loop).
 static b8 JABCEndsWithJs(const char* s) {
   size_t n = strlen(s);
   return n >= 3 && strcmp(s + n - 3, ".js") == 0;
@@ -316,9 +316,9 @@ int main(int argc, char** argv) {
   //  JAB: the first positional decides the entry shape.  A `.js` first arg is a
   //  SCRIPT: an EXPLICIT path (/abs, ./rel, ../up) runs the file directly via
   //  global eval (require rebased to its own dir); a bare/relative `.js` (e.g.
-  //  `foo.js`, `be/main.js`) resolves via the upward be/-scan (`__runScript`).
+  //  `foo.js`, `jsrc/main.js`) resolves via the upward jsrc/-scan (`__runScript`).
   //  ANYTHING else — a verb, a `scheme:` URI, a non-.js path, or no arg at all
-  //  — routes to be/main.js (`__main`) with the user's tokens passed through
+  //  — routes to jsrc/main.js (`__main`) with the user's tokens passed through
   //  as-is at argv[2:]; the resident loop triages the verb/URI/path/no-arg.
   if (rc == 0) {
     if (script_file != NULL && JABCEndsWithJs(script_file) &&
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
         rc = 1;
       }
     } else if (eval_code == NULL) {
-      //  verb / scheme:URI / non-.js path / bare `jab` → be/main.js (the loop).
+      //  verb / scheme:URI / non-.js path / bare `jab` → jsrc/main.js (the loop).
       if (!JABCRun("__main()")) rc = 1;
     }
   }
