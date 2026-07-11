@@ -566,6 +566,10 @@ static JABC_FN(JABCioRam) {
                    MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
   if (map == MAP_FAILED) JABC_THROW(strerror(errno));
   size_t* len = (size_t*)malloc(sizeof(size_t));
+  if (!len) {
+    munmap(map, n);
+    JABC_THROW(strerror(errno));
+  }
   *len = n;
   JSValueRef ta = JSObjectMakeTypedArrayWithBytesNoCopy(
       ctx, kJSTypedArrayTypeUint8Array, map, n, JABCRamFree, len, exception);
