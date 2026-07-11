@@ -100,15 +100,9 @@ static JABC_FN(JABCronEncode) {
   u8 b[16];
   u8s into = {b, b + sizeof(b)};
   RONutf8sFeed(into, (ok64)v);
-  size_t n = (size_t)(into[0] - b);
-  char tmp[17];
-  if (n > 16) n = 16;
-  memcpy(tmp, b, n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef r = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return r;
+  //  JS-108: shared conversion (RON60 text is <= 10 bytes by construction).
+  u8cs s = {b, into[0]};
+  return JABCStrOfSlice(ctx, s, exception);
 }
 
 //  ron.decode(string) -> BigInt
@@ -170,15 +164,9 @@ static JABC_FN(JABCronDate) {
   u8s into = {b, b + sizeof(b)};
   if (DOGutf8sFeedDate(into, secs, (i64)time(NULL)) != OK)
     JABC_THROW("ron._date: format failed");
-  size_t n = (size_t)(into[0] - b);
-  char tmp[17];
-  if (n > 16) n = 16;
-  memcpy(tmp, b, n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef r = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return r;
+  //  JS-108: shared conversion (a DOG date is <= 16 bytes by construction).
+  u8cs s = {b, into[0]};
+  return JABCStrOfSlice(ctx, s, exception);
 }
 
 //  JS sugar: now() binds the leaf; of() coerces Date->getTime(); date()

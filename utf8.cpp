@@ -56,16 +56,31 @@ static JABC_FN(JABCutf8Decode) {
   utf8cs scan = {(utf8c*)src[0], (utf8c*)src[1]};
   if (utf8sValid(scan) != OK) JABC_THROW("utf8.Decode(): malformed UTF-8");
 
-  size_t len = $len(src);
-  //  Code-point count <= byte count; an astral char is 4 bytes -> 2 units,
-  //  so `len` units is always enough room.
-  JSChar* units = (JSChar*)malloc((len + 1) * sizeof(JSChar));
-  if (units == NULL) JABC_THROW("utf8.Decode(): out of memory");
+  u8cs s = {src[0], src[1]};
+  return JABCStrOfSlice(ctx, s, exception);
+}
+
+//  JS-108: THE shared slice->string helper (see JABC.hpp).  One copy, into
+//  UTF-16 units with an explicit length — the ex-five divergent copies each
+//  round-tripped through a NUL-terminated scratch with its own silent cap.
+JSValueRef JABCStrOfSlice(JSContextRef ctx, u8cs s, JSValueRef* exception) {
+  size_t len = $len(s);
+  //  Code-point count <= byte count; an astral char is 4 bytes -> 2 units
+  //  and a bad byte -> 1 unit (U+FFFD), so `len` units is always enough.
+  JSChar pad[256];
+  JSChar* units = pad;
+  if (len + 1 > sizeof(pad) / sizeof(pad[0])) {
+    units = (JSChar*)malloc((len + 1) * sizeof(JSChar));
+    if (units == NULL) JABC_THROW("JABCStrOfSlice: out of memory");
+  }
   size_t k = 0;
-  utf8cs cur = {(utf8c*)src[0], (utf8c*)src[1]};
+  utf8cs cur = {(utf8c*)s[0], (utf8c*)s[1]};
   while (!$empty(cur)) {
     u32 cp = 0;
-    if (utf8sDrain32(&cp, cur) != OK) break;  //  validated above
+    if (utf8sDrain32(&cp, cur) != OK) {
+      cp = 0xFFFD;  //  malformed byte: emit the replacement char, resync +1
+      cur[0]++;
+    }
     if (cp <= 0xFFFF) {
       units[k++] = (JSChar)cp;
     } else {
@@ -75,7 +90,7 @@ static JABC_FN(JABCutf8Decode) {
     }
   }
   JSStringRef out = JSStringCreateWithCharacters(units, k);
-  free(units);
+  if (units != pad) free(units);
   JSValueRef val = JSValueMakeString(ctx, out);
   JSStringRelease(out);
   return val;

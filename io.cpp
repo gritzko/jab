@@ -20,9 +20,6 @@ static int JABCInt(JSContextRef ctx, JSValueRef v, JSValueRef* exception) {
   return (int)JSValueToNumber(ctx, v, exception);
 }
 
-//  Defined below (near cwd/getenv); forward-declared for io.readlink.
-static JSValueRef JABCSliceStr(JSContextRef ctx, u8cs s);
-
 //  Copy a JS-string path argument into a NUL-terminated path buffer.
 static ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
                      JSValueRef* exception) {
@@ -202,7 +199,7 @@ static JABC_FN(JABCioReadLink) {
   }
   a_path(target);
   if (FILEReadLink(target, $path(path)) != OK) JABC_THROW(strerror(errno));
-  return JABCSliceStr(ctx, u8bDataC(target));
+  return JABCStrOfSlice(ctx, u8bDataC(target), exception);
 }
 
 //  io.symlink(target, linkpath) -> create a symlink `linkpath` pointing at
@@ -614,27 +611,13 @@ static JABC_FN(JABCioTruncate) {
   JABC_UNDEF;
 }
 
-//  A JS string from a u8 slice (NUL-terminated copy; env / cwd is ASCII-ish
-//  text, small enough for a stack page).  Mirrors uri.cpp's JABCSliceStr.
-static JSValueRef JABCSliceStr(JSContextRef ctx, u8cs s) {
-  char tmp[PAGESIZE];
-  size_t n = (size_t)$len(s);
-  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
-  if (n) memcpy(tmp, s[0], n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef v = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return v;
-}
-
 //  io.cwd() -> string  (the process working directory, via getcwd(3)).
 static JABC_FN(JABCioCwd) {
   (void)args;
   (void)argc;
   a_path(cwd);
   if (FILEGetCwd(cwd) != OK) JABC_THROW(strerror(errno));
-  return JABCSliceStr(ctx, u8bDataC(cwd));
+  return JABCStrOfSlice(ctx, u8bDataC(cwd), exception);
 }
 
 //  io.getenv(name) -> string | undefined.  FILEGetEnv yields an empty slice
@@ -650,7 +633,8 @@ static JABC_FN(JABCioGetenv) {
   u8cs val = {};
   FILEGetEnv(name, val);
   if (u8csEmpty(val)) return JSValueMakeUndefined(ctx);
-  return JABCSliceStr(ctx, val);
+  //  JS-108: length-exact — a >PAGESIZE env value is no longer clamped.
+  return JABCStrOfSlice(ctx, val, exception);
 }
 
 //  io.getpid() -> number  (this process's PID, via getpid(2)).  JOBQ keys the

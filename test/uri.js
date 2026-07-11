@@ -71,4 +71,13 @@ eq(URI.unescape(URI.escape("a b/c")), "a b/c", "escape roundtrip");
   }
 }
 
+// JS-108: slice->string conversion is length-exact — a >2047-byte escape
+// result must come back whole (was: silent clamp in uri.cpp JABCSliceStr).
+{
+  const sp = " ".repeat(1200);              // escapes to %20 x 1200 = 3600
+  const esc = URI.escape(sp);
+  eq(esc.length, 3600, "long escape length");
+  if (esc !== "%20".repeat(1200)) fail("long escape content");
+}
+
 io.log("uri.js OK");

@@ -26,26 +26,6 @@ extern "C" {
 #include "dog/git/PIDX.h"
 }
 
-//  A fresh JS string over a u8cs slice's bytes (UTF-8), for commit ident /
-//  body / subject fields.  Embedded NULs survive (explicit length).
-static inline JSValueRef JABCStrOf(JSContextRef ctx, u8cp from, u8cp to) {
-  size_t n = (to > from) ? (size_t)(to - from) : 0;
-  JSStringRef s = JSStringCreateWithUTF8CString("");  // placeholder for empty
-  if (n) {
-    //  build via a NUL-free copy (UTF8 ctor stops at a NUL); use the char ctor.
-    char* buf = (char*)malloc(n + 1);
-    if (!buf) return JSValueMakeUndefined(ctx);
-    memcpy(buf, from, n);
-    buf[n] = 0;
-    JSStringRelease(s);
-    s = JSStringCreateWithUTF8CString(buf);
-    free(buf);
-  }
-  JSValueRef v = JSValueMakeString(ctx, s);
-  JSStringRelease(s);
-  return v;
-}
-
 //  A fresh lowercase-hex JS string over `n` raw bytes (sha shorthand).
 static inline JSValueRef JABCHexOf(JSContextRef ctx, const u8* bin, size_t n) {
   char* h = (char*)malloc(n * 2 + 1);
@@ -382,10 +362,10 @@ static JABC_FN(JABCgitParseCommit) {
   u8cs field = {}, value = {};
   while (GITu8sDrainCommit(scan, field, value) == OK) {
     if (field[0] == field[1]) {  //  blank line -> body is the rest
-      body = JABCStrOf(ctx, value[0], value[1]);
+      body = JABCStrOfSlice(ctx, value, exception);
       break;
     }
-    JSValueRef hv = JABCStrOf(ctx, value[0], value[1]);
+    JSValueRef hv = JABCStrOfSlice(ctx, value, exception);
     if (u8csEq(field, GIT_FIELD_PARENT))
       JSObjectSetPropertyAtIndex(ctx, parents, np++, hv, NULL);
     else if (u8csEq(field, GIT_FIELD_FOSTER))

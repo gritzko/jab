@@ -8,19 +8,6 @@ extern "C" {
 //  cross as JS strings (decoded), not zero-copy views.  The JS `URI` class
 //  (embedded below) wraps these leaves.
 
-//  A JS string from a u8 slice (NUL-terminated copy; URI bytes are ASCII-ish).
-static JSValueRef JABCSliceStr(JSContextRef ctx, u8cs s) {
-  char tmp[2048];
-  size_t n = (size_t)$len(s);
-  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
-  if (n) memcpy(tmp, s[0], n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef v = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return v;
-}
-
 static void JABCSetStr(JSContextRef ctx, JSObjectRef obj, const char* name,
                        JSValueRef val) {
   JSStringRef k = JSStringCreateWithUTF8CString(name);
@@ -33,9 +20,11 @@ static void JABCSetStr(JSContextRef ctx, JSObjectRef obj, const char* name,
 //  distinct from "/p?" (query "").  Presence is the slice pointer being
 //  non-NULL, per URIPattern.  URI-009.
 static void JABCSetComp(JSContextRef ctx, JSObjectRef obj, const char* name,
-                        u8cs s, bool present) {
+                        u8cs s, bool present, JSValueRef* exception) {
+  //  JS-108: the shared length-exact conversion replaced a 2048-byte clamp.
   JABCSetStr(ctx, obj, name,
-             present ? JABCSliceStr(ctx, s) : JSValueMakeUndefined(ctx));
+             present ? JABCStrOfSlice(ctx, s, exception)
+                     : JSValueMakeUndefined(ctx));
 }
 
 //  Copy a JS-string arg into `tmp`, fill `out` as a u8cs over it (NUL dropped).
@@ -68,14 +57,14 @@ static JABC_FN(JABCuriParse) {
   if (URILexer(&u) != OK) JABC_THROW("uri.parse: malformed");
   u8 pat = URIPattern(&u);
   JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
-  JABCSetComp(ctx, o, "scheme", u.scheme, pat & URI_SCHEME);
-  JABCSetComp(ctx, o, "authority", u.authority, pat & URI_AUTHORITY);
-  JABCSetComp(ctx, o, "user", u.user, pat & URI_USER);
-  JABCSetComp(ctx, o, "host", u.host, pat & URI_HOST);
-  JABCSetComp(ctx, o, "port", u.port, pat & URI_PORT);
-  JABCSetComp(ctx, o, "path", u.path, pat & URI_PATH);
-  JABCSetComp(ctx, o, "query", u.query, pat & URI_QUERY);
-  JABCSetComp(ctx, o, "fragment", u.fragment, pat & URI_FRAGMENT);
+  JABCSetComp(ctx, o, "scheme", u.scheme, pat & URI_SCHEME, exception);
+  JABCSetComp(ctx, o, "authority", u.authority, pat & URI_AUTHORITY, exception);
+  JABCSetComp(ctx, o, "user", u.user, pat & URI_USER, exception);
+  JABCSetComp(ctx, o, "host", u.host, pat & URI_HOST, exception);
+  JABCSetComp(ctx, o, "port", u.port, pat & URI_PORT, exception);
+  JABCSetComp(ctx, o, "path", u.path, pat & URI_PATH, exception);
+  JABCSetComp(ctx, o, "query", u.query, pat & URI_QUERY, exception);
+  JABCSetComp(ctx, o, "fragment", u.fragment, pat & URI_FRAGMENT, exception);
   return o;
 }
 
@@ -93,7 +82,7 @@ static JABC_FN(JABCuriMake) {
   if (URIMake(into, scheme, auth, path, query, frag) != OK)
     JABC_THROW("uri.make: failed");
   u8cs res = {base, into[0]};
-  return JABCSliceStr(ctx, res);
+  return JABCStrOfSlice(ctx, res, exception);
 }
 
 //  uri._esc(raw) -> percent-encoded ; uri._unesc(esc) -> decoded
@@ -106,7 +95,7 @@ static JABC_FN(JABCuriEsc) {
   u8* base = into[0];
   if (URIu8sEsc(into, raw) != OK) JABC_THROW("uri.escape: failed");
   u8cs res = {base, into[0]};
-  return JABCSliceStr(ctx, res);
+  return JABCStrOfSlice(ctx, res, exception);
 }
 static JABC_FN(JABCuriUnesc) {
   if (argc < 1) JABC_THROW("uri.unescape(string)");
@@ -117,7 +106,7 @@ static JABC_FN(JABCuriUnesc) {
   u8* base = into[0];
   if (URIu8sUnesc(into, esc) != OK) JABC_THROW("uri.unescape: failed");
   u8cs res = {base, into[0]};
-  return JABCSliceStr(ctx, res);
+  return JABCStrOfSlice(ctx, res, exception);
 }
 
 //  The JS-facing URI class over the leaves above.

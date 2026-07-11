@@ -18,6 +18,7 @@ Validated, length-explicit conversion between JS strings and caller-owned byte b
 
  -  `utf8.encodeInto(str, dst)` — encode into a caller-owned `Uint8Array`, return `n`; stops on a boundary (lone surrogates → U+FFFD).
  -  `utf8.Decode(u8)` — validate then build a JS string (explicit length, so embedded NULs survive).
+ -  `JABCStrOfSlice(ctx, u8cs, exception)` — THE C-side slice→string conversion (JS-108): length-exact, never truncates, bad UTF-8 → U+FFFD; all bindings use it.
 
 ###  io.cpp — fds, read/write, mmap, process leaves
 

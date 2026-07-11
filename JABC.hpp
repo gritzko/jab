@@ -67,6 +67,10 @@ JSValueRef JSOfCString(const char* str);
 //  and returns NO on a non-typed-array / detached (NULL ptr) argument.
 b8 JABCBytesOf(u8s out, JSContextRef ctx, JSValueRef arg, JSValueRef* exception);
 
+//  JS-108: THE u8-slice -> JS string conversion — length-explicit (embedded
+//  NULs survive, never truncates); invalid UTF-8 -> U+FFFD; throws on OOM.
+JSValueRef JABCStrOfSlice(JSContextRef ctx, u8cs s, JSValueRef* exception);
+
 void JABCExecute(const char* script);
 void JABCReport(JSValueRef exception);
 

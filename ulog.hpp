@@ -33,6 +33,28 @@ static size_t JABCulogUriText(u8* out, size_t cap, ulogrec* rec) {
   return (size_t)(into[0] - out);
 }
 
+//  JS-108: the URI text as a JS string, buffer sized from the components —
+//  long URIs read back whole (was: URIMake NOROOM on a 2048 pad -> "").
+static JSValueRef JABCulogUriStr(JSContextRef ctx, ulogrec* rec,
+                                 JSValueRef* exception) {
+  size_t bound = 3 * ($len(rec->uri.scheme) + $len(rec->uri.authority) +
+                      $len(rec->uri.path) + $len(rec->uri.query) +
+                      $len(rec->uri.fragment)) +
+                 16;  //  3x: URIMake may percent-escape; +16: the sigils
+  u8 pad[2048];
+  u8* buf = pad;
+  if (bound > sizeof(pad)) {
+    buf = (u8*)malloc(bound);
+    if (buf == NULL) JABC_THROW("ulog uri: out of memory");
+  }
+  size_t cap = bound > sizeof(pad) ? bound : sizeof(pad);
+  size_t n = JABCulogUriText(buf, cap, rec);
+  u8cs s = {buf, buf + n};
+  JSValueRef v = JABCStrOfSlice(ctx, s, exception);
+  if (buf != pad) free(buf);
+  return v;
+}
+
 //  Start offset of the row ending just before `off` (off is a row boundary).
 static size_t JABCulogPrevRow(u8* base, size_t off) {
   if (off == 0) return (size_t)-1;
@@ -117,31 +139,16 @@ static JABC_FN(JABCulogVerb) {
   u8 vb[16];
   u8s into = {vb, vb + sizeof(vb)};
   RONutf8sFeed(into, rec.verb);
-  size_t n = (size_t)(into[0] - vb);
-  char tmp[17];
-  if (n > 16) n = 16;
-  memcpy(tmp, vb, n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef v = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return v;
+  //  JS-108: shared conversion (a verb is RON60, <= 16 bytes by construction).
+  u8cs vs = {vb, into[0]};
+  return JABCStrOfSlice(ctx, vs, exception);
 }
 static JABC_FN(JABCulogUri) {
   u8s c = {};
   ulogrec rec = {};
   if (argc < 2 || !JABCulogAt(&rec, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
-  u8 ub[2048];
-  size_t n = JABCulogUriText(ub, sizeof(ub), &rec);
-  char tmp[2048];
-  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
-  if (n) memcpy(tmp, ub, n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef v = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return v;
+  return JABCulogUriStr(ctx, &rec, exception);
 }
 
 //  Shared scan for the seek* leaves.  kind: 0=verb(==v), 1=time(>=t fwd /
@@ -311,16 +318,7 @@ static JABC_FN(JABCulogRowUri) {
   u32 i = (u32)JSValueToNumber(ctx, args[1], exception);
   ulogrec rec = {};
   if (ULOGRow(h->data, h->idx, i, &rec) != OK) return JSValueMakeUndefined(ctx);
-  u8 ub[2048];
-  size_t n = JABCulogUriText(ub, sizeof(ub), &rec);
-  char tmp[2048];
-  if (n >= sizeof(tmp)) n = sizeof(tmp) - 1;
-  if (n) memcpy(tmp, ub, n);
-  tmp[n] = 0;
-  JSStringRef js = JSStringCreateWithUTF8CString(tmp);
-  JSValueRef v = JSValueMakeString(ctx, js);
-  JSStringRelease(js);
-  return v;
+  return JABCulogUriStr(ctx, &rec, exception);
 }
 
 //  _ulog_rowTime(handle, i) -> BigInt ts (round-trip verification helper).

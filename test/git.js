@@ -140,7 +140,6 @@ const treeBytes = concat(entries.map((e) => treeEntry(e.mode, e.name, e.seed)));
   eq(c.foster.length, 0, "root no foster");
   eq(c.body, "root commit\n", "root body");
 }
-
 // JS-109: the empty-tree and default-body fallbacks (no tree header / no blank
 // line) must yield "" — and, per the ticket, not leak the JSStringRef doing it.
 {
@@ -155,5 +154,17 @@ const treeBytes = concat(entries.map((e) => treeEntry(e.mode, e.name, e.seed)));
     eq(c.parents.length, 0, "no-tree commit parents");
   }
 }
-
+// JS-108: an embedded NUL in the commit body must survive into the JS string
+// (length-explicit conversion; was: the JSC copy stopped at the NUL).
+{
+  const head = "tree " + "3".repeat(40) +
+    "\nauthor A <a@x> 1 +0000\ncommitter A <a@x> 1 +0000\n\n";
+  const hb = utf8.Encode(head);
+  const body = new Uint8Array([98, 0, 99, 10]);          // "b\0c\n"
+  const buf = new Uint8Array(hb.length + body.length);
+  buf.set(hb, 0); buf.set(body, hb.length);
+  const c = git.parseCommit(buf);
+  eq(c.body.length, 4, "NUL body length");
+  eq(c.body.charCodeAt(1), 0, "NUL survives in body");
+}
 io.log("git.js: OK\n");

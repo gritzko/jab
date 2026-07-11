@@ -65,7 +65,6 @@ abc._ulog_close(h);
 
 const after = io.stat(path).size;
 if (!(after < before)) fail("close must trim the NUL pad (" + after + " !< " + before + ")");
-
 // --- 3. JS-103: booked appender URI gate — malformed throws, rows canon --
 h = abc._ulog_open(path);
 let bad103 = false;
@@ -76,5 +75,16 @@ abc._ulog_append(h, 1000n, "get", "?/");   // trunk: `?/` folds to `?`
 eq(abc._ulog_rowUri(h, 4), "?", "?/ must canonicalise to ? (trunk fold)");
 abc._ulog_close(h);
 
+// --- 4. JS-108: long URIs read back whole -------------------------------
+// A URI passed as BYTES (JABCBytesOf, uncapped) is stored full-length; the
+// rowUri read-back must be exact — was: URIMake NOROOM on a 2048 pad -> "".
+// (Follows section 3, so the log already carries 5 rows up to ts 1000n.)
+h = abc._ulog_open(path);
+const longUri = "?/" + "d".repeat(2500) + "#x";
+abc._ulog_append(h, 1100n, "post", utf8.Encode(longUri));   // monotonic past ts 1000n
+const got = abc._ulog_rowUri(h, 5);
+eq(got.length, longUri.length, "long rowUri length");
+eq(got === longUri, true, "long rowUri roundtrip");
+abc._ulog_close(h);
 cleanup();
 console.log("ulog_book: OK");
