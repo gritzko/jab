@@ -367,7 +367,7 @@ static JABC_FN(JABCgitParseCommit) {
   if (GITu8sCommitTree(commit, tree_sha) == OK)
     JABCSet(ctx, o, "tree", JABCHexOf(ctx, tree_sha, GIT_SHA1_LEN));
   else
-    JABCSet(ctx, o, "tree", JSValueMakeString(ctx, JSStringCreateWithUTF8CString("")));
+    JABCSet(ctx, o, "tree", JSOfCString(""));  // JS-109: releases its ref
 
   //  Walk the headers: collect parents/foster (hex sha values), pick the last
   //  author/committer ident lines; the blank line yields the body.
@@ -375,7 +375,7 @@ static JABC_FN(JABCgitParseCommit) {
   JSObjectRef foster = JSObjectMakeArray(ctx, 0, NULL, NULL);
   JSValueRef author = JSValueMakeUndefined(ctx);
   JSValueRef committer = JSValueMakeUndefined(ctx);
-  JSValueRef body = JSValueMakeString(ctx, JSStringCreateWithUTF8CString(""));
+  JSValueRef body = JSOfCString("");  // JS-109: releases its ref
   unsigned np = 0, nf = 0;
 
   u8cs scan = {c[0], c[1]};

@@ -141,4 +141,19 @@ const treeBytes = concat(entries.map((e) => treeEntry(e.mode, e.name, e.seed)));
   eq(c.body, "root commit\n", "root body");
 }
 
+// JS-109: the empty-tree and default-body fallbacks (no tree header / no blank
+// line) must yield "" — and, per the ticket, not leak the JSStringRef doing it.
+{
+  const commitStr =
+    "author A <a@x> 1700000000 +0000\n" +
+    "committer A <a@x> 1700000000 +0000\n";   // no tree, no blank line
+  for (let i = 0; i < 1000; i++) {            // amplify for the leak checker
+    const c = git.parseCommit(utf8.Encode(commitStr));
+    if (i) continue;
+    eq(c.tree, "", "no-tree commit -> empty tree");
+    eq(c.body, "", "no-blank-line commit -> default empty body");
+    eq(c.parents.length, 0, "no-tree commit parents");
+  }
+}
+
 io.log("git.js: OK\n");
