@@ -358,4 +358,97 @@ function freshdir(name) {
   io.log("index.js seek wh128 OK");
 }
 
+// ==========================================================================
+//  JS-105: a warm (unchanged) memtable must NOT be re-sorted per read — sort
+//  once when dirty (after a put), then get/range/prefix/seek skip it.  We
+//  count mem.sort calls by shadowing .sort on the instance, and interleave
+//  put/get/range against the oracle to prove reads stay exact throughout.
+// ==========================================================================
+
+//  --- u64: interleaved put/get/range correctness + sort-call counting ------
+{
+  const idx = abc.index("u64", { mem: 4096 });        // in-memory
+  const oracle = new Set();
+  let sorts = 0;
+  const orig = idx.mem.sort;
+  idx.mem.sort = function () { sorts++; return orig.call(this); };
+  if (idx.mem.sort === orig) fail("JS-105 sort shadow did not take");
+  const add = (v) => { idx.put(BigInt(v)); oracle.add(BigInt(v)); };
+
+  // interleave: after EVERY put, a hit and a miss must stay exact
+  for (const v of [42, 7, 999, 8, 300, 5, 100, 17, 256, 12, 2000, 11]) {
+    add(v);
+    eq(idx.get(BigInt(v)), BigInt(v), "JS-105 u64 hit after put " + v);
+    eq(idx.get(777777n), undefined, "JS-105 u64 miss after put " + v);
+  }
+  const sorted = [...oracle].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const out = [];
+  idx.range(0n, 100000n, (v) => { out.push(v); });
+  eq(JSON.stringify(out.map(String)),
+     JSON.stringify(sorted.map(String)), "JS-105 u64 range all");
+
+  // WARM reads: the memtable is sorted+clean now; zero further sorts
+  const warm = sorts;
+  for (let i = 0; i < 50; i++) eq(idx.get(42n), 42n, "JS-105 u64 warm get");
+  idx.range(5n, 500n, () => {});
+  idx.prefix(256n, 8, () => {});
+  const c = idx.seek(0n);
+  while (c.next());
+  eq(sorts, warm, "JS-105 u64 warm reads must not re-sort the memtable");
+
+  // one put dirties -> exactly ONE sort over the next read burst
+  add(4444);
+  for (let i = 0; i < 10; i++) eq(idx.get(4444n), 4444n, "JS-105 u64 get 4444");
+  eq(sorts, warm + 1, "JS-105 u64 one sort after a put, then warm again");
+
+  // flush empties the memtable; reads hit runs only and stay exact
+  idx.flush();
+  for (const v of [...oracle]) eq(idx.get(v), v, "JS-105 u64 post-flush hit " + v);
+  const postFlush = sorts;
+  for (let i = 0; i < 20; i++) idx.get(11n);
+  eq(sorts, postFlush, "JS-105 u64 post-flush reads never sort");
+
+  io.log("index.js JS-105 u64 OK");
+}
+
+//  --- wh128: interleaved put/get/range stays exact; warm reads skip sort ---
+{
+  const dir = freshdir("js105_wh128");
+  const idx = abc.index("wh128", { dir, ext: ".w", mem: 4096 });
+  const oracle = new Map();                           // unique keys per batch
+  let sorts = 0;
+  const orig = idx.mem.sort;
+  idx.mem.sort = function () { sorts++; return orig.call(this); };
+  const add = (k, v) => { idx.put(BigInt(k), BigInt(v)); oracle.set(BigInt(k), BigInt(v)); };
+
+  for (const [k, v] of [[10, 1], [20, 2], [30, 3], [40, 4]]) {
+    add(k, v);
+    eq(idx.get(BigInt(k)), BigInt(v), "JS-105 wh128 hit after put " + k);
+    eq(idx.get(999n), undefined, "JS-105 wh128 miss after put " + k);
+  }
+  idx.flush();                                        // batch 1 -> run 0
+  // batch 2 shadows key 30 via a NEWER memtable entry; interleave reads
+  for (const [k, v] of [[30, 99], [15, 15], [60, 6]]) {
+    add(k, v);
+    eq(idx.get(BigInt(k)), BigInt(v), "JS-105 wh128 hit after put " + k);
+  }
+  eq(idx.get(30n), 99n, "JS-105 wh128 memtable shadows the run");
+
+  // range has NO cross-run key dedup (v1): BOTH rows for key 30 stream out,
+  // in (key,val) order — [10,1] [15,15] [20,2] [30,3] [30,99] [40,4] [60,6].
+  const got = [];
+  idx.range(0n, 1000n, (pair) => { got.push(Number(pair[0])); });
+  eq(JSON.stringify(got), JSON.stringify([10, 15, 20, 30, 30, 40, 60]),
+     "JS-105 wh128 range keys");
+
+  // WARM: repeated point/range reads on the unchanged memtable never sort
+  const warm = sorts;
+  const keys = [...oracle.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const k of keys) eq(idx.get(k), oracle.get(k), "JS-105 wh128 warm key " + k);
+  idx.range(0n, 1000n, () => {});
+  eq(sorts, warm, "JS-105 wh128 warm reads must not re-sort the memtable");
+
+  io.log("index.js JS-105 wh128 OK");
+}
+
 io.log("index.js OK");

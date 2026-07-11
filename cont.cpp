@@ -596,6 +596,7 @@ static const char* JABC_CONT_JS = R"JS(
       runs: [],                    // oldest-first; each a HEAPlane container
       mem: abc.ram(M.fam, memSlots),
       _seq: 0,
+      _memDirty: false,   // JS-105: unsorted writes pending; every memtable write path must set it
     };
 
     //  validate alignment on opening a run RO: byteLength % (w*BPE) === 0.
@@ -626,8 +627,8 @@ static const char* JABC_CONT_JS = R"JS(
 
     //  put: append into the memtable (u64: one BigInt; wh128: key,val).
     idx.put = M.pair
-      ? function (k, v) { this.mem.push(BigInt(k), BigInt(v)); return this; }
-      : function (v)    { this.mem.push(BigInt(v));           return this; };
+      ? function (k, v) { this.mem.push(BigInt(k), BigInt(v)); this._memDirty = true; return this; }
+      : function (v)    { this.mem.push(BigInt(v));            this._memDirty = true; return this; };
 
     //  flush: memtable.sort() -> abc.merge([mem]) into a fresh sorted+deduped
     //  run -> push.  ON-DISK: book a temp file, merge into it, close (msync +
@@ -637,6 +638,7 @@ static const char* JABC_CONT_JS = R"JS(
     idx.flush = function () {
       if (this.mem.size === 0) return this;
       this.mem.sort();
+      this._memDirty = false;   // JS-105: clean once sorted
       if (this.onDisk) {
         const seq = this._seq++;
         const tmp = this.dir + "/." + String(seq).padStart(8, "0") + this.ext + ".tmp";
@@ -703,12 +705,12 @@ static const char* JABC_CONT_JS = R"JS(
     };
 
     //  snapshot the (live) query sources, newest-first: the sorted memtable
-    //  slice (if non-empty) followed by the runs newest->oldest.  Sorting the
-    //  memtable in place is idempotent for an already-sorted run.
+    //  slice (if non-empty) followed by the runs newest->oldest.
     const querySources = () => {
       const src = [];
       if (idx.mem.size > 0) {
-        idx.mem.sort();
+        //  JS-105: sort only a dirty memtable; warm reads skip the introsort.
+        if (idx._memDirty) { idx.mem.sort(); idx._memDirty = false; }
         src.push(idx.mem.subarray(0, (idx.mem.buffer.watermark | 0) * M.w));
       }
       for (let i = idx.runs.length - 1; i >= 0; i--) {
