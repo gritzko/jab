@@ -282,7 +282,8 @@ static const char* JABC_NET_JS = R"JS(
               : (data instanceof Buf) ? data.data() : data;
       if (u.length > this._wb.room) {        // grow the FIFO if backed up
         this._wb.shift();
-        if (u.length > this._wb.room) this._wb.grow(this._wb.size + u.length + (64 << 10));
+        // JS-104: geometric growth — amortized O(n) total copy under backpressure
+        if (u.length > this._wb.room) this._wb.grow(Math.max(this._wb.cap * 2, this._wb.size + u.length));
       }
       this._wb.feed(u);
       pol.more(this.fd, pol.OUT);            // ask the loop to drain it

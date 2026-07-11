@@ -94,6 +94,7 @@ add_test(NAME JABCconsole COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/console.j
 add_test(NAME JABCtty COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/tty.js)
 add_test(NAME JABCpol COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/pol.js)
 add_test(NAME JABCnet COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/net.js)
+add_test(NAME JABCnetGrow COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/netgrow.js)
 # JS-035: top-level test/js dir (not js-local), so ${CMAKE_SOURCE_DIR}.
 # JAB-005: beagle-owned test file — absent standalone, so existence-gated.
 if(EXISTS ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
