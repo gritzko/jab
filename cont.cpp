@@ -41,10 +41,13 @@ static const char* JABC_CONT_JS = R"JS(
     {
       const push = abc["_heap_" + lane + "_push"];
       const pop  = abc["_heap_" + lane + "_pop"];
+      const feed = abc["_heap_" + lane + "_feed"];
       const p = Object.create(M.A.prototype);
       p.push = M.pair
         ? function (k, v) { this.buffer.watermark = push(this, this.buffer.watermark, k, v); return this; }
         : function (v)    { this.buffer.watermark = push(this, this.buffer.watermark, v);    return this; };
+      //  JS-106: bulk push of a contiguous entries view, one native call.
+      p.feed = function (v) { this.buffer.watermark = feed(this, this.buffer.watermark, v); return this; };
       p.pop = function () {
         if (this.buffer.watermark === 0) return undefined;
         const r = pop(this, this.buffer.watermark);
@@ -630,6 +633,19 @@ static const char* JABC_CONT_JS = R"JS(
       ? function (k, v) { this.mem.push(BigInt(k), BigInt(v)); this._memDirty = true; return this; }
       : function (v)    { this.mem.push(BigInt(v));            this._memDirty = true; return this; };
 
+    //  JS-106: bulk put of a contiguous entries view (pack.scan's shape),
+    //  chunked by free memtable slots (auto-flush), one native call per chunk.
+    idx.feed = function (view) {
+      const cap = (this.mem.length / M.w) | 0;
+      for (let at = 0; at < view.length; ) {
+        let free = cap - this.mem.size;
+        if (free <= 0) { this.flush(); free = cap; }
+        const take = Math.min(free * M.w, view.length - at);
+        this.mem.feed(view.subarray(at, at + take));
+        at += take;
+      }
+      return this;
+    };
     //  flush: memtable.sort() -> abc.merge([mem]) into a fresh sorted+deduped
     //  run -> push.  ON-DISK: book a temp file, merge into it, close (msync +
     //  ftruncate), rename into the final run file, re-open RO.  IN-MEMORY: merge

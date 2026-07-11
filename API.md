@@ -353,6 +353,7 @@ and `compact` ride 3 native leaves (`<lane>sFindGE`, `HIT<lane>SeekRange`,
 ```js
 let ix = abc.index("u64", {dir:"idx", ext:".u64", mem:4096});  // or "wh128"
 ix.put(v);                 // u64: one BigInt;  wh128: ix.put(key, val)
+ix.feed(view);             // bulk put of a contiguous entries view (JS-106)
 ix.flush();                // memtable.sort()→merge into a fresh run
 ix.compact();              // 1/8 size-tiered ladder over .runs (full-elem dedup)
 ix.get(needle);            // POINT: u64 scalar / wh128 KEY → value | undefined

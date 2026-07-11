@@ -7,6 +7,7 @@
 //
 //  Leaves: _heap_<lane>_push(arr, size, v[, val]) -> newsize
 //          _heap_<lane>_pop(arr, size)            -> value | [key,val]
+//          _heap_<lane>_feed(arr, size, entries)  -> newsize   (JS-106 bulk)
 //  The cursor (size) lives in JS (buffer.watermark); native gets it as an arg.
 #include "cont.hpp"
 
@@ -85,6 +86,33 @@ extern "C" {
     return (WRV);                                                            \
   }
 
+//  JS-106: bulk push — _heap_<lane>_feed(arr, size, entries) -> newsize.
+//  `entries` is any typed array over contiguous LANE elements (e.g. the
+//  BigUint64Array view P.scan returns); one boundary crossing, n sifts in C.
+#define HEAP_FEED(LANE)                                                       \
+  static JABC_FN(jheap_##LANE##_feed) {                                       \
+    if (argc < 3) JABC_THROW("heap: feed argc");                              \
+    void* base;                                                               \
+    size_t cap;                                                               \
+    if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))     \
+      return JSValueMakeUndefined(ctx);                                       \
+    size_t n = (size_t)JSValueToNumber(ctx, args[1], exception);              \
+    u8s eb = {};                                                              \
+    if (!JABCBytesOf(eb, ctx, args[2], exception))                            \
+      return JSValueMakeUndefined(ctx);                                       \
+    size_t m = (size_t)$len(eb) / sizeof(LANE);                               \
+    if ((size_t)$len(eb) != m * sizeof(LANE)) JABC_THROW("heap: feed align"); \
+    if (n > cap || m > cap - n) JABC_THROW("heap: full");                     \
+    LANE* bb = (LANE*)base;                                                   \
+    if ((u8*)bb < eb[1] && eb[0] < (u8*)(bb + cap))                           \
+      JABC_THROW("heap: feed overlap");                                      \
+    LANE* buf[4] = {bb, bb, bb + n, bb + cap};                                \
+    const LANE* e = (const LANE*)eb[0];                                       \
+    for (size_t i = 0; i < m; i++)                                            \
+      if (HEAP##LANE##Push(buf, e + i) != OK) JABC_THROW("heap: push");       \
+    return JSValueMakeNumber(ctx, (double)(buf[2] - bb));                     \
+  }
+
 //  Marshal shapes.
 #define HEAP_NUM(LANE)                                                    \
   HEAP_DEF(LANE, 3, v = (LANE)JSValueToNumber(ctx, args[2], exception),   \
@@ -133,9 +161,21 @@ HEAP_PB(wh128)
 HEAP_BLOB(sha1)
 HEAP_BLOB(sha256)
 
+HEAP_FEED(u8)
+HEAP_FEED(u16)
+HEAP_FEED(u32)
+HEAP_FEED(u64)
+HEAP_FEED(wh64)
+HEAP_FEED(kv32)
+HEAP_FEED(kv64)
+HEAP_FEED(wh128)
+HEAP_FEED(sha1)
+HEAP_FEED(sha256)
+
 #define HEAP_REG(LANE)                                              \
   JABC_API_FN(o, "_heap_" #LANE "_push", jheap_##LANE##_push);      \
-  JABC_API_FN(o, "_heap_" #LANE "_pop", jheap_##LANE##_pop)
+  JABC_API_FN(o, "_heap_" #LANE "_pop", jheap_##LANE##_pop);        \
+  JABC_API_FN(o, "_heap_" #LANE "_feed", jheap_##LANE##_feed)
 
 static inline void JABCHeapInstall(JSObjectRef o) {
   HEAP_REG(u8);

@@ -70,6 +70,7 @@ The 3 backing-agnostic native leaves an `abc.index` rides, plus the constructor 
  -  `_findge_<lane>`/`_seekrange_<lane>`/`_compact_<lane>` — binary-search point, range/prefix drain, 1/8-ladder compaction leaf.
  -  `abc.index(...)` — a stack of oldest-first sorted runs (`.runs`) + a memtable, on-disk (`dir`) or in-memory (anon `io.ram`).
  -  `.put`/`.flush`/`.compact`/`.get` — write to memtable, merge into a fresh run, compact, point lookup.
+ -  `.feed(view)` — JS-106 bulk put of a contiguous entries view (pack.scan's shape), chunked + auto-flushed, one `_heap_<lane>_feed` crossing per chunk.
  -  `.range`/`.prefix` — stream hits through an in-frame cb (no cross-run dedup; collapse is compaction's job).
  -  `.seek(needle)` — pure-JS pull cursor; `.next()` yields one merged entry (min-heap + newest-wins), exposing `.key`/`.val`/`.entry`.
 

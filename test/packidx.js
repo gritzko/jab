@@ -151,4 +151,15 @@ for (let i = 0; i < app.length; i += 2)
   if (msg.includes("NOROOM")) fail("REF_DELTA misreported as NOROOM");
 }
 
+// JS-106: the bulk path — idx.feed(pack.scan's view) == the per-entry put
+// loop above (same sha->offset answers for every scanned object).
+{
+  const eb = io.buf(p.count * 16 + 64);
+  const es = p.scan(eb);
+  const bulk = abc.index("wh128", { mem: 4096 });
+  bulk.feed(es).flush();
+  for (const [kStr, val] of oracle)
+    eq(bulk.get(BigInt(kStr)), val, "JS-106 bulk sha->offset " + kStr);
+}
+
 io.log("packidx.js OK");
