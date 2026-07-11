@@ -66,5 +66,15 @@ abc._ulog_close(h);
 const after = io.stat(path).size;
 if (!(after < before)) fail("close must trim the NUL pad (" + after + " !< " + before + ")");
 
+// --- 3. JS-103: booked appender URI gate — malformed throws, rows canon --
+h = abc._ulog_open(path);
+let bad103 = false;
+try { abc._ulog_append(h, 900n, "post", "http://ho st/path"); } catch (e) { bad103 = true; }
+if (!bad103) fail("malformed URI must throw, not write a truncated row");
+eq(abc._ulog_count(h), 4, "no row written for the malformed URI");
+abc._ulog_append(h, 1000n, "get", "?/");   // trunk: `?/` folds to `?`
+eq(abc._ulog_rowUri(h, 4), "?", "?/ must canonicalise to ? (trunk fold)");
+abc._ulog_close(h);
+
 cleanup();
 console.log("ulog_book: OK");

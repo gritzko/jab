@@ -19,6 +19,7 @@ extern "C" {
 #define private private_
 #include "dog/ULOG.h"
 #undef private
+#include "dog/DOG.h"
 }
 
 //  ULOGu8sDrain leaves rec.uri.data empty (only the parsed components are
@@ -40,6 +41,15 @@ static size_t JABCulogPrevRow(u8* base, size_t off) {
   return j;                            //  start of that row (after the prior '\n', or 0)
 }
 
+//  JS-103: write-side URI gate — check URILexer's ok64 (was dropped) and
+//  canonicalise via the DOGCanonURI chokepoint so JS rows match C rows.
+static b8 JABCulogUriGate(ulogrecp rec, u8s us) {
+  rec->uri.data[0] = us[0];
+  rec->uri.data[1] = us[1];
+  if (URILexer(&rec->uri) != OK) return NO;
+  return DOGCanonURI(&rec->uri) == OK;
+}
+
 //  _ulog_feed(buf, off, verb, uri, ts) -> new write head
 static JABC_FN(JABCulogFeed) {
   if (argc < 4) JABC_THROW("ulog._feed(buf, off, verb, uri, ts)");
@@ -59,9 +69,7 @@ static JABC_FN(JABCulogFeed) {
   ulogrec rec = {};
   rec.ts = (ron60)ts;
   rec.verb = verb;
-  rec.uri.data[0] = us[0];
-  rec.uri.data[1] = us[1];
-  URILexer(&rec.uri);
+  if (!JABCulogUriGate(&rec, us)) JABC_THROW("ulog._feed: malformed uri");
   u8s into = {c[0] + off, c[1]};
   if (ULOGu8sFeed(into, &rec) != OK) JABC_THROW("ulog: feed (full?)");
   return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - c[0]));
@@ -282,9 +290,7 @@ static JABC_FN(JABCulogAppend) {
   ulogrec rec = {};
   rec.ts = (ron60)ts;
   rec.verb = verb;
-  rec.uri.data[0] = us[0];
-  rec.uri.data[1] = us[1];
-  URILexer(&rec.uri);
+  if (!JABCulogUriGate(&rec, us)) JABC_THROW("ulog._append: malformed uri");
   if (ULOGAppendAt(h->data, h->idx, &rec) != OK) JABC_THROW("ulog._append (clock/full?)");
   return JSBigIntCreateWithUInt64(ctx, (uint64_t)rec.ts, exception);
 }

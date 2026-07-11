@@ -49,4 +49,16 @@ let threw = false;
 try { log.seek(new Uint8Array(4)); } catch (e) { threw = true; }
 if (!threw) fail("sha addressing not rejected");
 
+// JS-103: the write side must reject a malformed URI (URILexer's ok64 was
+// dropped -> a silently truncated "http:" row) and canonicalise like C rows.
+let threw103 = false;
+try { log.feed("post", "http://ho st/path"); } catch (e) { threw103 = true; }
+if (!threw103) fail("malformed URI must throw, not write truncated");
+log.rewind(); let rows103 = 0, last103;
+while (log.next()) { rows103++; last103 = log.uri; }
+eq(rows103, 3, "no row written for the malformed URI");
+log.feed("get", "?/");                     // trunk: `?/` folds to `?`
+log.rewind(); while (log.next()) last103 = log.uri;
+eq(last103, "?", "?/ must canonicalise to ? (trunk fold)");
+
 io.log("ulog.js OK");
