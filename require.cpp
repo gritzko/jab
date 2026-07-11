@@ -92,9 +92,13 @@ static const char* JABC_REQUIRE_JS = R"JS(
     const module = { exports: {}, id: abs, filename: abs };
     cache[abs] = module;                       // before eval: cycle-safe
     const dir = dirname(abs);
-    const fn = new Function("module", "exports", "require",
-                            "__filename", "__dirname", src);
-    fn(module, module.exports, makeRequire(dir), abs, dir);
+    //  JS-112: compile/eval failure evicts the cache entry and rethrows so a
+    //  retry re-evaluates (Node CommonJS); before-eval insert stays for cycles.
+    try {
+      const fn = new Function("module", "exports", "require",
+                              "__filename", "__dirname", src);
+      fn(module, module.exports, makeRequire(dir), abs, dir);
+    } catch (e) { delete cache[abs]; throw e; }
     return module.exports;
   }
 

@@ -67,4 +67,22 @@ function writeFile(path, text) {
   if (require(d + "/miss.js") !== true) fail("missing bareword not rejected");
 }
 
+// JS-112: a module whose eval THROWS must be evicted from the cache, so a
+// retried require re-runs the body and rethrows (Node), not partial exports.
+{
+  const d = "/tmp/jabc_req_js112_" + Date.now();
+  io.mkdir(d);
+  globalThis.__js112 = 0;
+  writeFile(d + "/throw.js",
+    "globalThis.__js112++; exports.partial = 1; throw 'boom';");
+  let threw = false;
+  try { require(d + "/throw.js"); } catch (e) { threw = String(e) === "boom"; }
+  if (!threw) fail("throwing module: first require did not rethrow the throw");
+  let threw2 = false;
+  try { require(d + "/throw.js"); } catch (e) { threw2 = String(e) === "boom"; }
+  if (!threw2) fail("throwing module: retry returned partial exports");
+  eq(globalThis.__js112, 2, "throwing module: retry re-evaluates the body");
+  io.unlink(d + "/throw.js");
+}
+
 io.log("require.js OK");
