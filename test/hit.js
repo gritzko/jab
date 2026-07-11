@@ -67,4 +67,18 @@ eq(nums(run("u32", [9, 1, 5, 1], false).subarray(0, 4)), "1,1,5,9", "u32 sort");
   eq(io.stat(path).size, 48, "trimmed file size");   // 6 u64 == 48 bytes, not 512
 }
 
+
+// JS-101: short-armed raw sort calls must throw cleanly (argc guard),
+// not read past the JSC args[] array (OOB, UB reachable from plain JS).
+function throws(f, m) { try { f(); } catch (e) { return; } fail(m + ": no throw"); }
+{
+  const buf = new Uint8Array(64);
+  const all = ["u8", "u16", "u32", "u64", "kv32", "kv64",
+               "wh64", "wh128", "sha1", "sha256"];
+  for (const L of all) {
+    const sort = abc["_sort_" + L];
+    throws(() => sort(), L + " sort argc=0");
+    throws(() => sort(buf), L + " sort argc=1");
+  }
+}
 io.log("hit.js OK");

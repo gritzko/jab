@@ -90,6 +90,8 @@ CSSWAP(sha1) CSSWAP(sha256)
 //  sort leaf: sort the live [0,n) region in place by the lane Z.
 #define SORT_LEAF(L)                                                          \
   static JABC_FN(jsort_##L) {                                                 \
+    /* JS-101: argc guard — short-armed calls must throw, not read OOB */     \
+    if (argc < 2) JABC_THROW("_sort_" #L "(arr, size)");                      \
     void* base;                                                               \
     size_t cap;                                                               \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(L), exception))        \

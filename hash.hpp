@@ -72,8 +72,11 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
 
 //  put / get / del leaf triple per lane.  RDPUT fills `v` for insertion,
 //  RDKEY fills `v`'s key for lookup, WRGET turns a found `v` into a JS value.
-#define HASH_DEF(LANE, RDPUT, RDKEY, WRGET)                                 \
+//  JS-101: argc guards (NPUT/NKEY = put/lookup arity) — a short-armed call
+//  must throw, not read past the JSC args[] array.
+#define HASH_DEF(LANE, NPUT, NKEY, RDPUT, RDKEY, WRGET)                     \
   static JABC_FN(jhash_##LANE##_put) {                                      \
+    if (argc < NPUT) JABC_THROW("_hash_" #LANE "_put(arr, key[, val])");    \
     void* base;                                                            \
     size_t cap;                                                            \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))   \
@@ -86,6 +89,7 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
     return JSValueMakeUndefined(ctx);                                       \
   }                                                                         \
   static JABC_FN(jhash_##LANE##_get) {                                      \
+    if (argc < NKEY) JABC_THROW("_hash_" #LANE "_get(arr, key[, val])");    \
     void* base;                                                            \
     size_t cap;                                                            \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))   \
@@ -98,6 +102,7 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
     return (WRGET);                                                         \
   }                                                                         \
   static JABC_FN(jhash_##LANE##_del) {                                      \
+    if (argc < NKEY) JABC_THROW("_hash_" #LANE "_del(arr, key[, val])");    \
     void* base;                                                            \
     size_t cap;                                                            \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))   \
@@ -113,21 +118,21 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
 //  Marshal shapes.  Scalar lanes key on the value itself; pair lanes key on
 //  .key and store/return .val.
 #define HASH_NUM(LANE)                                                      \
-  HASH_DEF(LANE, v = (LANE)JSValueToNumber(ctx, args[1], exception),        \
+  HASH_DEF(LANE, 2, 2, v = (LANE)JSValueToNumber(ctx, args[1], exception),  \
            v = (LANE)JSValueToNumber(ctx, args[1], exception),             \
            JSValueMakeNumber(ctx, (double)v))
 #define HASH_U64(LANE)                                                      \
-  HASH_DEF(LANE, v = (LANE)JSValueToUInt64(ctx, args[1], exception),        \
+  HASH_DEF(LANE, 2, 2, v = (LANE)JSValueToUInt64(ctx, args[1], exception),  \
            v = (LANE)JSValueToUInt64(ctx, args[1], exception),             \
            JSBigIntCreateWithUInt64(ctx, (uint64_t)v, exception))
 #define HASH_PN(LANE)                                                       \
-  HASH_DEF(LANE,                                                            \
+  HASH_DEF(LANE, 3, 2,                                                      \
            (v.key = (u32)JSValueToNumber(ctx, args[1], exception),          \
             v.val = (u32)JSValueToNumber(ctx, args[2], exception)),         \
            v.key = (u32)JSValueToNumber(ctx, args[1], exception),           \
            JSValueMakeNumber(ctx, (double)v.val))
 #define HASH_PB(LANE)                                                       \
-  HASH_DEF(LANE,                                                            \
+  HASH_DEF(LANE, 3, 2,                                                      \
            (v.key = (u64)JSValueToUInt64(ctx, args[1], exception),          \
             v.val = (u64)JSValueToUInt64(ctx, args[2], exception)),         \
            v.key = (u64)JSValueToUInt64(ctx, args[1], exception),           \
@@ -135,7 +140,7 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
 //  wh128 keys on the FULL (key,val) record (wh128hashEq compares both): a set
 //  of pairs, not a key->val map, so a lookup must supply both fields.
 #define HASH_SET_PB(LANE)                                                   \
-  HASH_DEF(LANE,                                                            \
+  HASH_DEF(LANE, 3, 3,                                                      \
            (v.key = (u64)JSValueToUInt64(ctx, args[1], exception),          \
             v.val = (u64)JSValueToUInt64(ctx, args[2], exception)),         \
            (v.key = (u64)JSValueToUInt64(ctx, args[1], exception),          \
@@ -157,7 +162,8 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
     memcpy(v.data, _b[0], sizeof(v));                                         \
   }
 #define HASH_BLOB(LANE)                                                       \
-  HASH_DEF(LANE, HASH_BLOB_RD, HASH_BLOB_RD, JABCBlob(ctx, v.data, sizeof(v)))
+  HASH_DEF(LANE, 2, 2, HASH_BLOB_RD, HASH_BLOB_RD,                            \
+           JABCBlob(ctx, v.data, sizeof(v)))
 
 HASH_NUM(u8)
 HASH_NUM(u16)

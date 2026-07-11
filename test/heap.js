@@ -32,4 +32,18 @@ for (const L of lanes) {
   eq(h.size, 0, L + " drained");
   eq(h.pop(), undefined, L + " pop empty");
 }
+
+// JS-101: short-armed raw leaf calls must throw cleanly (argc guard),
+// not read past the JSC args[] array (OOB, UB reachable from plain JS).
+function throws(f, m) { try { f(); } catch (e) { return; } fail(m + ": no throw"); }
+{
+  const buf = new Uint8Array(64);
+  for (const L of lanes.concat(["sha1", "sha256"])) {
+    const push = abc["_heap_" + L + "_push"], pop = abc["_heap_" + L + "_pop"];
+    throws(() => push(buf), L + " push argc=1");
+    throws(() => push(buf, 0), L + " push argc=2");
+    if (pair[L]) throws(() => push(buf, 0, 1n), L + " push argc=3");
+    throws(() => pop(buf), L + " pop argc=1");
+  }
+}
 io.log("heap.js OK (" + lanes.length + " lanes)");

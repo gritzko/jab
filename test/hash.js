@@ -36,4 +36,21 @@ for (const L of lanes) {
   if (S ? h.has(K(keys[0]), K(keys[0] + 1)) : h.has(K(keys[0])))
     fail(L + " not deleted");
 }
+
+// JS-101: short-armed raw leaf calls must throw cleanly (argc guard),
+// not read past the JSC args[] array (OOB, UB reachable from plain JS).
+function throws(f, m) { try { f(); } catch (e) { return; } fail(m + ": no throw"); }
+{
+  const buf = new Uint8Array(256);
+  for (const L of lanes.concat(["sha1", "sha256"])) {
+    const put = abc["_hash_" + L + "_put"], get = abc["_hash_" + L + "_get"],
+          del = abc["_hash_" + L + "_del"];
+    throws(() => put(buf), L + " put argc=1");
+    if (pair[L] || set[L]) throws(() => put(buf, 1n), L + " put argc=2");
+    throws(() => get(buf), L + " get argc=1");
+    if (set[L]) throws(() => get(buf, 1n), L + " get argc=2");
+    throws(() => del(buf), L + " del argc=1");
+    if (set[L]) throws(() => del(buf, 1n), L + " del argc=2");
+  }
+}
 io.log("hash.js OK (" + lanes.length + " lanes)");

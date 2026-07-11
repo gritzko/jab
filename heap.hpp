@@ -52,8 +52,11 @@ extern "C" {
 //  One push/pop leaf pair per lane.  RDV fills `v` from args[2..]; WRV turns a
 //  popped `v` into a JS value.  The cap/buffer/error boilerplate is generated
 //  once here and shared across every lane.
-#define HEAP_DEF(LANE, RDV, WRV)                                              \
+//  JS-101: argc guards (NPUSH = push arity) — a short-armed call must throw,
+//  not read past the JSC args[] array.
+#define HEAP_DEF(LANE, NPUSH, RDV, WRV)                                       \
   static JABC_FN(jheap_##LANE##_push) {                                       \
+    if (argc < NPUSH) JABC_THROW("_heap_" #LANE "_push(arr, size, v[, val])");\
     void* base;                                                              \
     size_t cap;                                                             \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))    \
@@ -68,6 +71,7 @@ extern "C" {
     return JSValueMakeNumber(ctx, (double)(buf[2] - bb));                   \
   }                                                                          \
   static JABC_FN(jheap_##LANE##_pop) {                                       \
+    if (argc < 2) JABC_THROW("_heap_" #LANE "_pop(arr, size)");              \
     void* base;                                                              \
     size_t cap;                                                             \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))    \
@@ -83,19 +87,19 @@ extern "C" {
 
 //  Marshal shapes.
 #define HEAP_NUM(LANE)                                                    \
-  HEAP_DEF(LANE, v = (LANE)JSValueToNumber(ctx, args[2], exception),      \
+  HEAP_DEF(LANE, 3, v = (LANE)JSValueToNumber(ctx, args[2], exception),   \
            JSValueMakeNumber(ctx, (double)v))
 #define HEAP_U64(LANE)                                                    \
-  HEAP_DEF(LANE, v = (LANE)JSValueToUInt64(ctx, args[2], exception),      \
+  HEAP_DEF(LANE, 3, v = (LANE)JSValueToUInt64(ctx, args[2], exception),   \
            JSBigIntCreateWithUInt64(ctx, (uint64_t)v, exception))
 #define HEAP_PN(LANE)                                                        \
-  HEAP_DEF(LANE,                                                             \
+  HEAP_DEF(LANE, 4,                                                          \
            (v.key = (u32)JSValueToNumber(ctx, args[2], exception),           \
             v.val = (u32)JSValueToNumber(ctx, args[3], exception)),          \
            JABCPair(ctx, JSValueMakeNumber(ctx, (double)v.key),              \
                     JSValueMakeNumber(ctx, (double)v.val)))
 #define HEAP_PB(LANE)                                                        \
-  HEAP_DEF(LANE,                                                             \
+  HEAP_DEF(LANE, 4,                                                          \
            (v.key = (u64)JSValueToUInt64(ctx, args[2], exception),           \
             v.val = (u64)JSValueToUInt64(ctx, args[3], exception)),          \
            JABCPair(ctx, JSBigIntCreateWithUInt64(ctx, (uint64_t)v.key,      \
@@ -107,7 +111,7 @@ extern "C" {
 //  Uint8Array of exactly sizeof(LANE).  RDV reads+validates it into `v.data`;
 //  WRV returns a fresh Uint8Array copy of the popped struct.
 #define HEAP_BLOB(LANE)                                                       \
-  HEAP_DEF(LANE,                                                              \
+  HEAP_DEF(LANE, 3,                                                           \
            {                                                                  \
              u8s _b = {};                                                     \
              if (!JABCBytesOf(_b, ctx, args[2], exception))                   \
