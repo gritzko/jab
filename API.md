@@ -150,6 +150,7 @@ io.rename("a.tmp", "a");          // atomic rename within a FS       (FILERename
 io.mkdir("a/b/c");                // create dir + parents (idempotent)(FILEMakeDirP)
 io.rmdir("d", true);              // remove a dir (recursive=rm -rf)  (FILERmDir)
 let dir = io.cwd();               // process working directory      (FILEGetCwd)
+io.chdir("repo");                 // set cwd; throws on ENOENT/ENOTDIR (chdir(2))
 let h = io.getenv("HOME");        // env var, undefined if unset    (FILEGetEnv)
 ```
 

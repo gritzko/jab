@@ -620,6 +620,22 @@ static JABC_FN(JABCioCwd) {
   return JABCStrOfSlice(ctx, u8bDataC(cwd), exception);
 }
 
+//  io.chdir(path) -> set the process working directory (over chdir(2)).  The
+//  cwd getter's setter: mirrors io.mkdir's validation + errno propagation, so
+//  on success io.cwd() reflects the new dir and on failure (ENOENT/ENOTDIR/
+//  EACCES) it throws strerror(errno) with the cwd unchanged.  The pager
+//  (BRO-024) chdir's into a repo before running verbs.
+static JABC_FN(JABCioChdir) {
+  if (argc < 1) JABC_THROW("io.chdir(path)");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.chdir(): bad path");
+  }
+  if (chdir((char const*)*$path(path)) != 0) JABC_THROW(strerror(errno));
+  JABC_UNDEF;
+}
+
 //  io.getenv(name) -> string | undefined.  FILEGetEnv yields an empty slice
 //  for an unset (or empty-valued) var; either way we return `undefined`.
 static JABC_FN(JABCioGetenv) {
@@ -903,6 +919,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "reap", JABCioReap);
   JABC_API_FN(io, "isatty", JABCioIsatty);
   JABC_API_FN(io, "cwd", JABCioCwd);
+  JABC_API_FN(io, "chdir", JABCioChdir);
   JABC_API_FN(io, "getpid", JABCioGetpid);
   JABC_API_FN(io, "getenv", JABCioGetenv);
   JABC_API_FN(io, "log", JABCioLog);
