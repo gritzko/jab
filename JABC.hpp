@@ -22,6 +22,36 @@ using namespace abc;
 extern thread_local JSGlobalContextRef JABC_CONTEXT;
 extern thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 
+//  JAB-008: PRO.h's ABC_BASS (C-style __thread TLS, see pro.hpp); declared
+//  here so the guard below needs no PRO.h include (§6 keeps it out of headers).
+extern "C" {
+extern __thread u8* ABC_BASS[4];
+}
+
+//  JAB-008: the binding-side equivalent of PRO.h call()'s BASS bracket — dup
+//  the DATA+IDLE heads, restore on every exit path (JABC_THROW / C++ unwind).
+class JABCBassGuard {
+  u8* data_;
+  u8* idle_;
+
+ public:
+  JABCBassGuard() : data_(ABC_BASS[1]), idle_(ABC_BASS[2]) {}
+  ~JABCBassGuard() {
+    ABC_BASS[1] = data_;
+    ABC_BASS[2] = idle_;
+  }
+};
+
+//  JAB-008: run a binding leaf under the guard, so raw C-op invocations from
+//  JABC_FNs leak no BASS carve set (main maps ABC_BASS once, no call() rewinds).
+template <JSObjectCallAsFunctionCallback F>
+JSValueRef JABCBassGuarded(JSContextRef ctx, JSObjectRef function,
+                           JSObjectRef self, size_t argc,
+                           const JSValueRef args[], JSValueRef* exception) {
+  JABCBassGuard bass;
+  return F(ctx, function, self, argc, args, exception);
+}
+
 //  A native binding function.  Its return value IS the JS result; on error
 //  it sets *exception (via JABC_THROW) and returns undefined.
 #define JABC_FN(fn)                                                       \
@@ -50,12 +80,14 @@ extern thread_local JSObjectRef JABC_GLOBAL_OBJECT;
     JSStringRelease(n_);                                             \
   }
 
-//  Attach native function `f` as method `n` of object `o`.
+//  Attach native function `f` as method `n` of object `o`.  JAB-008: every
+//  leaf is registered through the BASS bracket (JABCBassGuarded above).
 #define JABC_API_FN(o, n, f)                                                  \
   {                                                                           \
     JSStringRef fn_ = JSStringCreateWithUTF8CString(n);                       \
     JSObjectSetProperty(JABC_CONTEXT, o, fn_,                                 \
-                        JSObjectMakeFunctionWithCallback(JABC_CONTEXT, fn_, f),\
+                        JSObjectMakeFunctionWithCallback(JABC_CONTEXT, fn_,   \
+                                                         JABCBassGuarded<f>), \
                         kJSPropertyAttributeNone, NULL);                      \
     JSStringRelease(fn_);                                                     \
   }
