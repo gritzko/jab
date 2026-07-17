@@ -140,30 +140,33 @@ CSSWAP(sha1) CSSWAP(sha256)
       if (!JABCBytesOf(d, ctx, args[1], exception))                           \
         return JSValueMakeUndefined(ctx);                                     \
       if ((size_t)$len(d) < total * sizeof(L)) JABC_THROW("merge: out too small");\
-      L* dp = (L*)d[0];                                                       \
-      L* db = dp;                                                             \
+      /* JAB-009: ABC-015 drains take a BOUNDED slice (head advances past    \
+         the output), not a bare cursor */                                    \
+      L* db = (L*)d[0];                                                       \
+      L##s dst = {db, (L*)d[1]};                                             \
       if (N > 0) {                                                            \
         L##css heap = {ent, ent + N};                                         \
         HIT##L##Start(heap);                                                  \
-        if (isect) HIT##L##Intersect(heap, &dp, N);                          \
-        else HIT##L##Merge(heap, &dp);                                        \
+        ok64 mo = isect ? HIT##L##Intersect(heap, dst, N)                     \
+                        : HIT##L##Merge(heap, dst);                           \
+        if (mo != OK) JABC_THROW("merge: out too small");                     \
       }                                                                       \
-      return JSValueMakeNumber(ctx, (double)(size_t)(dp - db));               \
+      return JSValueMakeNumber(ctx, (double)(size_t)(dst[0] - db));           \
     }                                                                         \
     JSObjectRef out = JSObjectMakeTypedArray(                                 \
         ctx, kJSTypedArrayTypeUint8Array, total * sizeof(L), exception);      \
     if (*exception || !out) return JSValueMakeUndefined(ctx);                 \
-    L* op = (L*)JSObjectGetTypedArrayBytesPtr(ctx, out, exception);           \
-    L* ob = op;                                                               \
+    L* ob = (L*)JSObjectGetTypedArrayBytesPtr(ctx, out, exception);           \
+    /* JAB-009: bounded ABC-015 drain slice; total is the exact upper bound */\
+    L##s op = {ob, ob + total};                                               \
     if (N > 0) {                                                              \
       L##css heap = {ent, ent + N};                                           \
       HIT##L##Start(heap);                                                    \
-      if (isect)                                                              \
-        HIT##L##Intersect(heap, &op, N);                                      \
-      else                                                                    \
-        HIT##L##Merge(heap, &op);                                             \
+      ok64 mo = isect ? HIT##L##Intersect(heap, op, N)                        \
+                      : HIT##L##Merge(heap, op);                              \
+      if (mo != OK) JABC_THROW("merge: out too small");                       \
     }                                                                         \
-    size_t cnt = (size_t)(op - ob);                                          \
+    size_t cnt = (size_t)(op[0] - ob);                                       \
     JSObjectRef buf = JSObjectGetTypedArrayBuffer(ctx, out, exception);       \
     return JSObjectMakeTypedArrayWithArrayBufferAndOffset(                    \
         ctx, kJSTypedArrayTypeUint8Array, buf, 0, cnt * sizeof(L), exception);\
