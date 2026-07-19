@@ -73,6 +73,7 @@ add_test(NAME JABCe2e COMMAND jab --eval
 add_test(NAME JABCheap COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/heap.js)
 add_test(NAME JABChash COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/hash.js)
 add_test(NAME JABCmmap COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmap.js)
+add_test(NAME JABCmmapfd COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmapfd.js)
 add_test(NAME JABCstat COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/stat.js)
 add_test(NAME JABCchdir COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/chdir.js)
 add_test(NAME JABCsha COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/sha.js)

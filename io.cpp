@@ -500,9 +500,19 @@ static JABC_FN(JABCioWrite) {
 
 //  Mapped-file deallocator: JS GC drives the munmap (buf is the FILE_WANT_BUFS
 //  slot handed to FILEUnMap).
+//  ABC-020: per-slot map generation; the finalizer ctx packs gen above the
+//  fd's FILE_MAX_OPEN_BITS so a stale husk never frees a reused slot (ABA).
+static uintptr_t JABC_MAP_GEN[FILE_MAX_OPEN];
+static void* JABCMapCtx(int fd) {
+  return (void*)((++JABC_MAP_GEN[fd] << FILE_MAX_OPEN_BITS) | (uintptr_t)fd);
+}
 static void JABCMapFree(void* bytes, void* ctx) {
-  (void)bytes;
-  FILEUnMap((u8bp)ctx);
+  uintptr_t v = (uintptr_t)ctx;
+  int fd = (int)(v & (uintptr_t)(FILE_MAX_OPEN - 1));
+  u8bp buf = FILE_WANT_BUFS ? FILE_WANT_BUFS[fd] : NULL;
+  //  ABC-020: unmap only while this husk's generation still owns the slot.
+  if (buf && buf[0] == (u8*)bytes && (v >> FILE_MAX_OPEN_BITS) == JABC_MAP_GEN[fd])
+    FILEUnMap(buf);
 }
 
 //  io._mmap(path, "r"|"rw"|"c", size) -> Uint8Array  (munmap on GC)
@@ -535,14 +545,26 @@ static JABC_FN(JABCioMmap) {
   //  everything in IDLE, a mapped existing file has it all in DATA — either
   //  way the container owns the full region.
   size_t mlen = u8bDataLen(buf) + u8bIdleLen(buf);
+  //  ABC-020: the finalizer gets (gen, fd) identity, not the slot pointer.
   JSValueRef ta = JSObjectMakeTypedArrayWithBytesNoCopy(
       ctx, kJSTypedArrayTypeUint8Array, u8bData(buf)[0], mlen,
-      JABCMapFree, (void*)buf, exception);
+      JABCMapFree, JABCMapCtx(FILEBookedFD(buf)), exception);
   if (*exception || ta == NULL) {
     FILEUnMap(buf);
     return JSValueMakeUndefined(ctx);
   }
   return ta;
+}
+
+//  io._munmap(u8) — ABC-020: release NOW (munmap + close(fd) + fd=-1) the
+//  FILE mapping whose base is this view's; a no-op for a non-FILE (ram) or
+//  already-released mapping.  The GC finalizer stays as an idempotent backstop.
+static JABC_FN(JABCioMunmap) {
+  if (argc < 1) JABC_THROW("io._munmap(Uint8Array)");
+  u8s ta = {};
+  if (!JABCBytesOf(ta, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  FILEUnMapBase(ta[0]);
+  JABC_UNDEF;
 }
 
 //  Anonymous-mapping deallocator: munmap the whole region, free the length box.
@@ -907,6 +929,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "_read", JABCioRead);
   JABC_API_FN(io, "_write", JABCioWrite);
   JABC_API_FN(io, "_mmap", JABCioMmap);
+  JABC_API_FN(io, "_munmap", JABCioMunmap);
   JABC_API_FN(io, "_ram", JABCioRam);
   JABC_API_FN(io, "_msync", JABCioMsync);
   JABC_API_FN(io, "_truncate", JABCioTruncate);

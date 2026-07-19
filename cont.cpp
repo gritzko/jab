@@ -420,15 +420,23 @@ static const char* JABC_CONT_JS = R"JS(
     return c;
   };
   abc.close = (c) => {
-    try { io._msync(c); } catch (e) {}
     const b = c.buffer;
+    let trim = -1;
     if (b._path) {                                  // booked: trim file to live size
       const M = LANE[c.lane];
       //  a PACK book (git.pack.book) has no .lane: it's a u8 log written
       //  start-to-end, so trim to the write head (watermark), no lane scaling.
-      if (M) io._truncate(b._path, (c.size | 0) * M.w * M.A.BYTES_PER_ELEMENT);
-      else   io._truncate(b._path, (b.watermark | 0));
+      trim = M ? (c.size | 0) * M.w * M.A.BYTES_PER_ELEMENT : (b.watermark | 0);
     }
+    //  ABC-020: detach FIRST (msync would materialize the buffer and defeat
+    //  transfer's move) so stale views read empty, then flush+trim+release the
+    //  fd+mapping NOW off the moved husk; double close is a harmless no-op.
+    let husk;
+    try { husk = b.transfer(); } catch (e) { return; }
+    const view = new Uint8Array(husk);
+    try { io._msync(view); } catch (e) {}
+    if (trim >= 0) io._truncate(b._path, trim);
+    io._munmap(view);
     b._map = null;
   };
 
