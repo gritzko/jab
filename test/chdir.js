@@ -10,16 +10,19 @@ const start = io.cwd();
 const dir = "/tmp/jabc_chdir_" + process.argv[0].length + "_" + Date.now();
 io.mkdir(dir);
 
-// chdir into the temp dir -> io.cwd() reflects the new dir
+// chdir into the temp dir -> io.cwd() reflects the new dir.  getcwd(3) hands
+// back the symlink-free path (on macOS /tmp is a symlink to /private/tmp),
+// so compare against io.realpath(dir), not the literal spelling.
+const canon = io.realpath(dir);
 io.chdir(dir);
-eq(io.cwd(), dir, "chdir sets cwd");
+eq(io.cwd(), canon, "chdir sets cwd");
 
 // a missing path throws (ENOENT) and leaves the cwd unchanged
 {
   let threw = false;
   try { io.chdir(dir + "/nonexistent"); } catch (e) { threw = true; }
   if (!threw) fail("chdir(missing) did not throw");
-  eq(io.cwd(), dir, "chdir(missing) left cwd unchanged");
+  eq(io.cwd(), canon, "chdir(missing) left cwd unchanged");
 }
 
 // chdir onto a plain file throws (ENOTDIR), cwd unchanged
@@ -29,7 +32,7 @@ eq(io.cwd(), dir, "chdir sets cwd");
   let threw = false;
   try { io.chdir(file); } catch (e) { threw = true; }
   if (!threw) fail("chdir(file) did not throw ENOTDIR");
-  eq(io.cwd(), dir, "chdir(file) left cwd unchanged");
+  eq(io.cwd(), canon, "chdir(file) left cwd unchanged");
   io.unlink(file);
 }
 

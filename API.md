@@ -138,6 +138,7 @@ let st = io.stat("data");         // {size,mode,kind,mtime,atime}  (FILEStat)
 let ls = io.lstat("link");        // same shape, no symlink follow (FILELStat)
 io.symlink("data", "link");       // create a symlink → target     (FILESymLink)
 let tg = io.readlink("link");     // → target string               (FILEReadLink)
+let rp = io.realpath("link");     // → canonical absolute path      (realpath(3))
 io.chmod("data", 0o755);          // set POSIX perm bits           (FILEChmod)
 io.setMtime("data", st.mtime);    // stamp atime+mtime (ron60 BigInt, NOFOLLOW) (FILESetMtime)
 let ns = io.readdir("dir");       // → string[], dirs marked "x/"  (FILEScanDir)
@@ -176,7 +177,9 @@ exec bit) are numbers, `kind` is `"reg"`/`"dir"`/`"lnk"`/`"other"`, and
 `io.stat` follows symlinks (a link to a regular file is `"reg"`); `io.lstat`
 does not (`"lnk"`), and stats a **dangling** link fine (no throw) since it
 inspects the link itself, never its target. `io.readlink(path)` returns a link's
-target string; `io.symlink(target, linkpath)` creates one (target stored
+target string; `io.realpath(path)` returns the canonical absolute path
+(symlinks resolved, `.`/`..` collapsed — `realpath(3)`; the path must exist,
+else it throws); `io.symlink(target, linkpath)` creates one (target stored
 verbatim, may be relative/dangling; throws if linkpath exists); `io.chmod(path,
 mode)` sets the permission bits (octal int, e.g. `0o755`). `io.setMtime(path,
 ron60)` stamps a file's atime **and** mtime to a `ron60` BigInt instant (the
@@ -557,6 +560,7 @@ k.msync();
 | `io.rmdir`                | `FILERmDir` (`recursive` = rm -rf)     |
 | `io.stat` / `io.lstat`    | `FILEStat` / `FILELStat` (`mtime`/`atime` ron60 BigInt) |
 | `io.readlink` / `symlink` | `FILEReadLink` / `FILESymLink`         |
+| `io.realpath`             | `realpath(3)`                          |
 | `io.chmod`                | `FILEChmod`                            |
 | `io.setMtime`             | `FILESetMtime` (`utimensat` NOFOLLOW)  |
 | `abc.index` get/range     | `<lane>sFindGE` / `HIT<lane>SeekRange` |

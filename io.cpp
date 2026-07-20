@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -200,6 +202,23 @@ static JABC_FN(JABCioReadLink) {
   a_path(target);
   if (FILEReadLink(target, $path(path)) != OK) JABC_THROW(strerror(errno));
   return JABCStrOfSlice(ctx, u8bDataC(target), exception);
+}
+
+//  io.realpath(path) -> string  (the canonical absolute path, over
+//  realpath(3): symlinks resolved, `.`/`..` collapsed; the path must exist,
+//  else it throws strerror(errno)).  This is the symlink-free spelling
+//  io.cwd() reports after io.chdir() — e.g. /tmp -> /private/tmp on macOS.
+static JABC_FN(JABCioRealPath) {
+  if (argc < 1) JABC_THROW("io.realpath(path) -> string");
+  a_pad(u8, path, FILE_PATH_MAX_LEN);
+  if (JABCPath(path, ctx, args[0], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("io.realpath(): bad path");
+  }
+  char resolved[PATH_MAX];
+  if (realpath((char const*)*$path(path), resolved) == NULL)
+    JABC_THROW(strerror(errno));
+  return JSOfCString(resolved);
 }
 
 //  io.symlink(target, linkpath) -> create a symlink `linkpath` pointing at
@@ -922,6 +941,7 @@ ok64 JABCioInstall() {
   JABC_API_FN(io, "stat", JABCioStat);
   JABC_API_FN(io, "lstat", JABCioLStat);
   JABC_API_FN(io, "readlink", JABCioReadLink);
+  JABC_API_FN(io, "realpath", JABCioRealPath);
   JABC_API_FN(io, "symlink", JABCioSymLink);
   JABC_API_FN(io, "chmod", JABCioChmod);
   JABC_API_FN(io, "setMtime", JABCioSetMtime);

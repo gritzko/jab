@@ -5,7 +5,13 @@
 function fail(m) { throw "FAIL " + m; }
 
 const path = "/tmp/jabc_mmapfd.bin";
-const fds = () => io.readdir("/proc/self/fd").length;
+// /proc/self/fd on Linux; macOS has no procfs, but /dev/fd lists the same
+// per-process open fds there.
+const fdDir = (() => {
+    try { io.readdir("/proc/self/fd"); return "/proc/self/fd"; }
+    catch (e) { return "/dev/fd"; }
+})();
+const fds = () => io.readdir(fdDir).length;
 
 //  prime the backing file, then take a baseline fd count
 abc.close(abc.mmap("HASHu32", path, "c", 256));

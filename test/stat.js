@@ -36,6 +36,17 @@ const dangle = dir + "/dangle";   // -> nowhere (dangling)
   eq(io.readlink(link), file, "readlink round-trip");
 }
 
+// io.realpath resolves the link and any symlinked prefix (/tmp on macOS) to
+// one canonical spelling; a missing path throws (ENOENT), errno-mapped.
+{
+  eq(io.realpath(link), io.realpath(file), "realpath resolves link");
+  const rp = io.realpath(file);
+  if (rp[0] !== "/") fail("realpath not absolute: " + rp);
+  let threw = false;
+  try { io.realpath(dir + "/nonexistent"); } catch (e) { threw = true; }
+  if (!threw) fail("realpath(missing) did not throw");
+}
+
 // io.stat follows the link (kind reg, same size); io.lstat does NOT (kind lnk)
 {
   const sf = io.stat(link);
