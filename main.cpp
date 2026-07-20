@@ -25,7 +25,11 @@ thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 //  PRO.h globals (one definition for the whole binary).
 //  __thread, not thread_local: C-style TLS links from C on Darwin (pro.hpp).
 u8 _pro_depth = 0;
-extern "C" __thread u8* ABC_BASS[4] = {};
+//  Brace form: a braced linkage-spec does not imply `extern` storage, so
+//  defining with an initializer stays warning-free (gcc -Wextern-initializer).
+extern "C" {
+__thread u8* ABC_BASS[4] = {};
+}
 
 static void JSInit() {
   JABC_CONTEXT = JSGlobalContextCreate(NULL);

@@ -16,7 +16,9 @@ thread_local JSGlobalContextRef JABC_CONTEXT;
 thread_local JSObjectRef JABC_GLOBAL_OBJECT;
 u8 _pro_depth = 0;
 //  __thread, not thread_local: C-style TLS links from C on Darwin (pro.hpp).
-extern "C" __thread u8* ABC_BASS[4] = {};
+extern "C" {
+__thread u8* ABC_BASS[4] = {};
+}
 
 static int failures = 0;
 
