@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: [ "[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach binaries to"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: jab-linux-x86_64
+          - os: ubuntu-24.04-arm
+            asset: jab-linux-arm64
+          - os: macos-latest
+            asset: jab-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install ninja-build clang \
+            libjavascriptcoregtk-4.1-dev \
+            libsodium-dev libcurl4-gnutls-dev liblz4-dev zlib1g-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja libsodium lz4
+
+      - name: Configure
+        run: >
+          cmake -B build -GNinja
+          -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+          ${{ runner.os == 'Linux' && '-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++' || '' }}
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --parallel 4 --no-tests=error
+
+      - name: Pack
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          NAME="${{ matrix.asset }}-${TAG}"
+          install -d "dist/${NAME}"
+          cp build/bin/jab "dist/${NAME}/"
+          cp README.md "dist/${NAME}/" 2>/dev/null || true
+          tar -C dist -czf "${NAME}.tar.gz" "${NAME}"
+          shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            ${{ matrix.asset }}-*.tar.gz
+            ${{ matrix.asset }}-*.tar.gz.sha256
