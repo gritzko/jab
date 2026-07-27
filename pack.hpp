@@ -462,6 +462,8 @@ static inline const char* JABCPackWords(ok64 o) {
   if (o == REPACKROOM) return "pack: the index region is full";
   if (o == REPACKLOGS) return "pack: the stream needs more logs than allowed";
   if (o == REPACKHDR) return "pack: the stream does not start with a pack header";
+  if (o == REPACKSUM)
+    return "pack: the stream's checksum does not match — it arrived damaged";
   if (o == ZINFFAIL) return "pack: the compressed data is damaged";
   if (o == PACKBADFMT || o == PACKBADOBJ) return "pack: malformed pack record";
   if (o == DELTFAIL || o == DELTBADFMT) return "pack: a delta could not be applied";

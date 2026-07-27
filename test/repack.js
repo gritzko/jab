@@ -29,9 +29,18 @@ p.feed("blob", near, 12);            //  base = the FIRST record (offset 12)
 bodies.push(near);
 abc._pack_header(p, 0, N);           //  patch the header's object count
 
-const wfd = io.open(SRC, "c");
-io._write(wfd, p.subarray(0, p.buffer.watermark));
-io.close(wfd);
+//  A pack ends with the sha1 of everything before it — the binding verifies
+//  it (KEEP-006 step 6), so the fixture must write a real one.
+const body = p.subarray(0, p.buffer.watermark);
+const PACK = new Uint8Array(body.length + 20);
+PACK.set(body);
+PACK.set(sha1(body), body.length);
+function writePack(path, bytes) {
+  const fd = io.open(path, "c");
+  io._write(fd, bytes);
+  io.close(fd);
+}
+writePack(SRC, PACK);
 
 //  --- one call: the whole pack into one log ---------------------------------
 function run(shard, cap) {
@@ -56,10 +65,11 @@ if (one.st.indexN !== N + 1) fail("index " + one.st.indexN + " != " + (N + 1));
 if (one.st.ofs < 1) fail("no delta survived as OFS (" + one.st.ofs + ")");
 if (one.seen !== N) fail("progress never reached the end (" + one.seen + ")");
 //  The cursor comes back ADVANCED: everything the loop ate is PAST, and what
-//  it did not eat stays DATA (over a git-written pack that is the 20-byte
-//  trailer; this synthetic source carries none, so DATA lands empty).
-if (one.buf._idle !== one.buf._data)
-  fail("buf cursor: " + one.buf._data + ".." + one.buf._idle + " (want empty)");
+//  it did not eat stays DATA — the 20-byte trailer, which the loop neither
+//  reads nor verifies (the checksum is off, see REPACK.h).
+if (one.buf._idle - one.buf._data !== 20)
+  fail("buf cursor: " + one.buf._data + ".." + one.buf._idle +
+       " (want the 20-byte trailer left)");
 if (one.buf._data === 0) fail("buf cursor never advanced");
 
 //  --- the index the binding wrote == what the scanner reads back ------------
@@ -94,3 +104,31 @@ if (many.st.indexN !== N + many.st.logs)
   fail("rotated index " + many.st.indexN + " for " + many.st.logs + " logs");
 //  a delta whose base landed in an earlier log is re-anchored by sha (KEEP-006)
 if (many.st.ref + many.st.ofs < 1) fail("the delta vanished across the split");
+
+//  --- the trailer checks, DORMANT (REPACK.h: the checksum is off) ----------
+//  Re-enable together with the SHA1 blocks in REPACK.c: a flipped trailer bit
+//  must come back as the checksum message, and a stream cut exactly on a
+//  record boundary as the truncation one.
+/*
+function refused(name, bytes) {
+  writePack(DIR + "/" + name + ".pack", bytes);
+  const shard = DIR + "/" + name;
+  try { io.mkdir(shard); } catch (e) {}
+  const fd = io.open(DIR + "/" + name + ".pack", "r");
+  let err = "";
+  try {
+    git.pack(fd, io.buf(1 << 20), shard,
+             { log0: 0, index: abc.ram("HEAPwh128", 1024) });
+  } catch (e) { err = String(e); }
+  io.close(fd);
+  return err;
+}
+const bad = new Uint8Array(PACK);
+bad[bad.length - 1] ^= 0x01;                      //  one bit of the trailer
+const badErr = refused("bad", bad);
+if (badErr.indexOf("checksum") < 0)
+  fail("a damaged trailer was not refused in plain words: " + badErr);
+const cutErr = refused("cut", PACK.subarray(0, PACK.length - 20));
+if (cutErr.indexOf("ended in the middle") < 0)
+  fail("a trailerless stream was not refused in plain words: " + cutErr);
+*/
