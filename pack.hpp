@@ -24,6 +24,8 @@ extern "C" {
 #include "dog/git/GIT.h"
 #include "dog/git/PACK.h"
 #include "dog/git/PIDX.h"
+#include "dog/git/REPACK.h"
+#include "dog/git/ZINF.h"
 }
 
 //  A fresh lowercase-hex JS string over `n` raw bytes (sha shorthand).
@@ -384,7 +386,162 @@ static JABC_FN(JABCgitParseCommit) {
   return o;
 }
 
+//  --- JAB-020: git.pack(fd, buf, shard, opts) -> stats ------------------
+//
+//  ONE call per fetch.  The whole ingest loop lives in dog/git/REPACK.c, so
+//  the boundary is crossed once instead of once per object and no pack byte
+//  is ever materialised in the JS heap.  `buf` is a JS Buf — PAST|DATA|IDLE
+//  over a JS-owned Uint8Array (buf.cpp) — whose DATA is what the pkt-line
+//  reader already ate off the wire; the binding reconstitutes a u8b over it,
+//  the loop reads straight into its IDLE, and the advanced `_data`/`_idle`
+//  are written back.  The buffer never grows: size it at the log cap, since
+//  a record too big for it is too big for a capped log either way.
+
+//  Read property `name` off a JS object (the getter twin of JABCSet).
+static inline JSValueRef JABCGet(JSContextRef ctx, JSObjectRef o,
+                                 const char* name) {
+  JSStringRef n = JSStringCreateWithUTF8CString(name);
+  JSValueRef v = JSObjectGetProperty(ctx, o, n, NULL);
+  JSStringRelease(n);
+  return v;
+}
+
+static inline double JABCNumOf(JSContextRef ctx, JSObjectRef o,
+                               const char* name, double dflt) {
+  if (o == NULL) return dflt;
+  JSValueRef v = JABCGet(ctx, o, name);
+  if (JSValueIsUndefined(ctx, v) || JSValueIsNull(ctx, v)) return dflt;
+  return JSValueToNumber(ctx, v, NULL);
+}
+
+//  The stats record REPACKRun fills, as a plain JS object.
+static inline JSObjectRef JABCPackStats(JSContextRef ctx,
+                                        repack_stat const* st) {
+  JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
+  JABCSet(ctx, o, "objects", JSValueMakeNumber(ctx, (double)st->objects));
+  JABCSet(ctx, o, "total", JSValueMakeNumber(ctx, (double)st->total));
+  JABCSet(ctx, o, "raw", JSValueMakeNumber(ctx, (double)st->raw));
+  JABCSet(ctx, o, "ofs", JSValueMakeNumber(ctx, (double)st->ofs));
+  JABCSet(ctx, o, "ref", JSValueMakeNumber(ctx, (double)st->ref));
+  JABCSet(ctx, o, "inBytes", JSValueMakeNumber(ctx, (double)st->in_bytes));
+  JABCSet(ctx, o, "outBytes", JSValueMakeNumber(ctx, (double)st->out_bytes));
+  JABCSet(ctx, o, "log0", JSValueMakeNumber(ctx, (double)st->log0));
+  JABCSet(ctx, o, "logs", JSValueMakeNumber(ctx, (double)st->logs));
+  JABCSet(ctx, o, "logLen", JSValueMakeNumber(ctx, (double)st->log_len));
+  JABCSet(ctx, o, "indexN", JSValueMakeNumber(ctx, (double)st->index_n));
+  return o;
+}
+
+//  Progress: one JS call every `every` objects, the live stats as its arg.
+//  A throwing handler stops the run (its exception is re-raised below).
+typedef struct {
+  JSContextRef ctx;
+  JSObjectRef fn;
+  JSValueRef exc;
+} jabc_repack_watch;
+
+static ok64 JABCPackWatch(void* user, repack_stat const* st) {
+  jabc_repack_watch* w = (jabc_repack_watch*)user;
+  JSValueRef arg = JABCPackStats(w->ctx, st);
+  JSValueRef exc = NULL;
+  JSObjectCallAsFunction(w->ctx, w->fn, NULL, 1, &arg, &exc);
+  if (exc == NULL) return OK;
+  if (w->exc == NULL) {
+    w->exc = exc;
+    JSValueProtect(w->ctx, exc);
+  }
+  return REPACKFAIL;
+}
+
+//  Errors cross the boundary in PLAIN WORDS, never as an ok64 code.
+static inline const char* JABCPackWords(ok64 o) {
+  if (o == REPACKTORN) return "pack: the stream ended in the middle of a record";
+  if (o == REPACKBIG)
+    return "pack: an object is too big for the buffer and the log cap";
+  if (o == REPACKBASE) return "pack: a delta cites a base that never arrived";
+  if (o == REPACKROOM) return "pack: the index region is full";
+  if (o == REPACKLOGS) return "pack: the stream needs more logs than allowed";
+  if (o == REPACKHDR) return "pack: the stream does not start with a pack header";
+  if (o == ZINFFAIL) return "pack: the compressed data is damaged";
+  if (o == PACKBADFMT || o == PACKBADOBJ) return "pack: malformed pack record";
+  if (o == DELTFAIL || o == DELTBADFMT) return "pack: a delta could not be applied";
+  return "pack: the stream could not be repacked";
+}
+
+//  git.pack(fd, buf, shard, opts) -> stats
+//    opts.cap     per-log byte cap (default 2^31-1)
+//    opts.log0    first `NNNNNNNNNN.keeper` file id in the shard
+//    opts.index   caller's wh128 region for the index entries
+//    opts.every   progress granularity in objects
+//    opts.onStep  progress handler, called with the live stats
+static JABC_FN(JABCpackRepack) {
+  if (argc < 3) JABC_THROW("git.pack(fd, buf, shard, opts) -> stats");
+  int fd = (int)JSValueToNumber(ctx, args[0], exception);
+  if (fd < 0) JABC_THROW("git.pack: bad fd");
+  if (!JSValueIsObject(ctx, args[1])) JABC_THROW("git.pack: buf must be a Buf");
+  JSObjectRef bo = JSValueToObject(ctx, args[1], exception);
+  u8s bytes = {};
+  if (!JABCBytesOf(bytes, ctx, JABCGet(ctx, bo, "bytes"), exception))
+    return JSValueMakeUndefined(ctx);
+  size_t bcap = (size_t)$len(bytes);
+  size_t bdata = (size_t)JABCNumOf(ctx, bo, "_data", 0);
+  size_t bidle = (size_t)JABCNumOf(ctx, bo, "_idle", 0);
+  if (bdata > bidle || bidle > bcap)
+    JABC_THROW("git.pack: the buffer's cursor is out of range");
+  u8b buf = {bytes[0], bytes[0] + bdata, bytes[0] + bidle, bytes[0] + bcap};
+
+  a_pad(u8, shard, FILE_PATH_MAX_LEN);
+  if (JABCPath(shard, ctx, args[2], exception) != OK) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("git.pack: bad shard path");
+  }
+
+  JSObjectRef oo = (argc > 3 && JSValueIsObject(ctx, args[3]))
+                       ? JSValueToObject(ctx, args[3], NULL) : NULL;
+  u8s ix = {};
+  if (oo == NULL ||
+      !JABCBytesOf(ix, ctx, JABCGet(ctx, oo, "index"), exception)) {
+    if (*exception) return JSValueMakeUndefined(ctx);
+    JABC_THROW("git.pack: opts.index (a wh128 region) is required");
+  }
+  if (((uintptr_t)ix[0] & 7u) != 0)
+    JABC_THROW("git.pack: opts.index is not 8-byte aligned");
+  wh128* ib = (wh128*)ix[0];
+  wh128* icap = ib + (size_t)$len(ix) / sizeof(wh128);
+  wh128* ibuf[4] = {ib, ib, ib, icap};
+
+  jabc_repack_watch w = {ctx, NULL, NULL};
+  JSValueRef cb = JABCGet(ctx, oo, "onStep");
+  if (JSValueIsObject(ctx, cb) &&
+      JSObjectIsFunction(ctx, JSValueToObject(ctx, cb, NULL)))
+    w.fn = JSValueToObject(ctx, cb, NULL);
+  repack_conf conf = {};
+  conf.cap = (u64)JABCNumOf(ctx, oo, "cap", 0);
+  conf.log0 = (u32)JABCNumOf(ctx, oo, "log0", 0);
+  conf.every = (u64)JABCNumOf(ctx, oo, "every", 0);
+  if (w.fn != NULL) {
+    conf.watch = JABCPackWatch;
+    conf.user = &w;
+    if (conf.every == 0) conf.every = 100000;
+  }
+
+  repack_stat st = {};
+  ok64 r = REPACKRun(fd, buf, $path(shard), &conf, ibuf, &st);
+  //  Hand the consumed/filled boundaries back to the caller's Buf either
+  //  way — a failed run still ate what it ate.
+  JABCSet(ctx, bo, "_data", JSValueMakeNumber(ctx, (double)(buf[1] - bytes[0])));
+  JABCSet(ctx, bo, "_idle", JSValueMakeNumber(ctx, (double)(buf[2] - bytes[0])));
+  if (w.exc != NULL) {           //  the progress handler threw: re-raise it
+    *exception = w.exc;
+    JSValueUnprotect(ctx, w.exc);
+    return JSValueMakeUndefined(ctx);
+  }
+  if (r != OK) JABC_THROW(JABCPackWords(r));
+  return JABCPackStats(ctx, &st);
+}
+
 static inline void JABCPackInstall(JSObjectRef o) {
+  JABC_API_FN(o, "_pack_repack", JABCpackRepack);
   JABC_API_FN(o, "_git_tree_next", JABCgitTreeNext);
   JABC_API_FN(o, "_git_parse_commit", JABCgitParseCommit);
   JABC_API_FN(o, "_pack_header", JABCpackHeader);

@@ -23,8 +23,8 @@ static int JABCInt(JSContextRef ctx, JSValueRef v, JSValueRef* exception) {
 }
 
 //  Copy a JS-string path argument into a NUL-terminated path buffer.
-static ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
-                     JSValueRef* exception) {
+ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
+              JSValueRef* exception) {
   if (!JSValueIsString(ctx, arg)) return BADARG;
   JSStringRef s = JSValueToStringCopy(ctx, arg, exception);
   if (*exception || s == NULL) return BADARG;
@@ -534,6 +534,15 @@ static void JABCMapFree(void* bytes, void* ctx) {
     FILEUnMap(buf);
 }
 
+//  The largest region io._mmap will hand out: 2 GiB minus one byte.
+//  NOT the engine's own limit — JSC allocates up to 4 GiB inclusive, but only
+//  2^32-1 of that is addressable (a[2^32-1] reads `undefined`, JS's canonical
+//  not-an-index sentinel), and the JS-side Buf `| 0` cursors in [JAB-007] wrap
+//  NEGATIVE at 2^31 exactly, so `io.mmap` above us silently yields an empty or
+//  garbled view from there up.  2^31-1 is the largest size that survives the
+//  WHOLE path, and it matches the `MMAP_CAP` ingest.js already refuses at.
+#define JABC_MAP_MAX (((size_t)1 << 31) - 1)
+
 //  io._mmap(path, "r"|"rw"|"c", size) -> Uint8Array  (munmap on GC)
 static JABC_FN(JABCioMmap) {
   if (argc < 1) JABC_THROW("io._mmap(path, mode, size)");
@@ -564,6 +573,17 @@ static JABC_FN(JABCioMmap) {
   //  everything in IDLE, a mapped existing file has it all in DATA — either
   //  way the container owns the full region.
   size_t mlen = u8bDataLen(buf) + u8bIdleLen(buf);
+  //  Refuse oversized mappings HERE, before the NoCopy constructor: past the
+  //  engine's own 4 GiB it does not report a JS error, it ABORTS the process
+  //  (verified: a 2^32+1 sparse file -> SIGABRT, no `*exception` set, so the
+  //  cleanup arm below never runs).  We stop far short of that anyway — see
+  //  JABC_MAP_MAX: everything above 2^31-1 is either silently truncated by the
+  //  [JAB-007] Buf cursors or unaddressable at the last byte.  Plain words.
+  if (mlen > JABC_MAP_MAX) {
+    FILEUnMap(buf);
+    JABC_THROW("io._mmap(): the file is bigger than 2 GiB, "
+               "which is the largest region jab can map at once");
+  }
   //  ABC-020: the finalizer gets (gen, fd) identity, not the slot pointer.
   JSValueRef ta = JSObjectMakeTypedArrayWithBytesNoCopy(
       ctx, kJSTypedArrayTypeUint8Array, u8bData(buf)[0], mlen,

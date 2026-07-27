@@ -484,7 +484,15 @@ static const char* JABC_CONT_JS = R"JS(
     v.buffer.watermark = 0;
     return v;
   };
-  const pack = {
+  //  JAB-020: `git.pack` is BOTH the container namespace (ram/over/mmap/book,
+  //  unchanged) and the one-call stream ingest: git.pack(fd, buf, shard, opts)
+  //  repacks a whole fetch into `<shard>/NNNNNNNNNN.keeper` logs inside libdog
+  //  and returns its stats — no pack byte ever reaches the JS heap.  `buf` is
+  //  a Buf (its DATA is what the pkt-line reader already ate, its `_data` /
+  //  `_idle` come back advanced); `opts.index` is the caller's wh128 region.
+  const pack = (fd, buf, shard, opts) =>
+    abc._pack_repack(fd, buf, shard, opts || {});
+  Object.assign(pack, {
     ram:  (slots) => packBuild(io._ram(slots)),
     over: (ta) => packBuild((ta instanceof Uint8Array) ? ta
                             : new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength)),
@@ -500,7 +508,7 @@ static const char* JABC_CONT_JS = R"JS(
       c.buffer._path = path;
       return c;
     },
-  };
+  });
   //  git.tree(bytes[, cb]) — JS-028.  A PULL cursor over a git tree blob
   //  `(<mode> <name>\0<20-byte sha>)*`: ALL cursor state lives in JS (rule #4),
   //  the native leaf abc._git_tree_next drains exactly ONE entry per call (over

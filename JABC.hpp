@@ -95,6 +95,10 @@ JSValueRef JABCBassGuarded(JSContextRef ctx, JSObjectRef function,
 //  Make a JS string value from a C string (used for error text / small keys).
 JSValueRef JSOfCString(const char* str);
 
+//  Copy a JS-string path argument into a NUL-terminated path buffer.
+ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
+              JSValueRef* exception);
+
 //  Read a typed array's backing range into a binary slice.  Sets *exception
 //  and returns NO on a non-typed-array / detached (NULL ptr) argument.
 b8 JABCBytesOf(u8s out, JSContextRef ctx, JSValueRef arg, JSValueRef* exception);
