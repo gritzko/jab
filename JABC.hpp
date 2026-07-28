@@ -99,9 +99,31 @@ JSValueRef JSOfCString(const char* str);
 ok64 JABCPath(path8b path, JSContextRef ctx, JSValueRef arg,
               JSValueRef* exception);
 
-//  Read a typed array's backing range into a binary slice.  Sets *exception
-//  and returns NO on a non-typed-array / detached (NULL ptr) argument.
-b8 JABCBytesOf(u8s out, JSContextRef ctx, JSValueRef arg, JSValueRef* exception);
+//  PTR-010 (arg.cpp): THE JS->C argument boundary.  A JS number is untrusted
+//  input — never cast one to size_t and never add it to a pointer.  These
+//  gates gain their bounds from abc (u8bUsed / u8csLen); a binding that
+//  builds a slice by hand is a bug, see arg.cpp for why.
+b8 JABCu64Of(u64* out, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+b8 JABCi64Of(i64* out, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+b8 JABCu32Of(u32* out, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+b8 JABCu8Of(u8* out, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+//  A typed array as a read source (whole view = DATA) / write target (= IDLE).
+b8 JABCDataOf(u8b buf, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+b8 JABCIdleOf(u8b buf, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+//  A JS-given position inside a slice; JABCBufAt moves DATA there (the
+//  consumed prefix becomes PAST, so the whole buffer stays reachable).
+b8 JABCOffOf(size_t* out, u8csc whole, JSContextRef ctx, JSValueRef arg,
+             JSValueRef* ex);
+b8 JABCBufAt(u8b buf, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+b8 JABCBufFed(u8b buf, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+//  A JS Buf object ({bytes,_data,_idle}) as a u8b, cursors validated; hand
+//  the advanced boundaries back with JABCBufBack.
+b8 JABCBufOf(u8b buf, JSContextRef ctx, JSValueRef arg, JSValueRef* ex);
+void JABCBufBack(JSContextRef ctx, JSObjectRef bo, u8b buf);
+JSValueRef JABCGetProp(JSContextRef ctx, JSObjectRef o, const char* name);
+void JABCSetProp(JSContextRef ctx, JSObjectRef o, const char* name,
+                 JSValueRef v);
+
 
 //  JS-108: THE u8-slice -> JS string conversion — length-explicit (embedded
 //  NULs survive, never truncates); invalid UTF-8 -> U+FFFD; throws on OOM.

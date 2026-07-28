@@ -19,39 +19,38 @@ extern "C" {
 //  zip._deflate(src, out, outOff) -> bytes produced into out at outOff.
 static JABC_FN(JABCzipDeflate) {
   if (argc < 3) JABC_THROW("zip._deflate(src, out, outOff)");
-  u8s src = {}, out = {};
-  if (!JABCBytesOf(src, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(out, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[2], exception);
-  if (*exception) return JSValueMakeUndefined(ctx);
-  if (off > (size_t)$len(out)) JABC_THROW("zip.deflate: outOff past end");
-  u8s into = {out[0] + off, out[1]};
-  u8cs s = {src[0], src[1]};
-  if (ZINFDeflate(into, s) != OK) JABC_THROW("zip.deflate: failed (out too small?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - (out[0] + off)));
+  u8* srcb[4] = {};
+  u8* outb[4] = {};
+  if (!JABCDataOf(srcb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[2], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  size_t before = u8bDataLen(outb);
+  if (ZINFDeflate(u8bIdle(outb), u8bDataC(srcb)) != OK)
+    JABC_THROW("zip.deflate: failed (out too small?)");
+  return JSValueMakeNumber(ctx, (double)(u8bDataLen(outb) - before));
 }
 
 //  zip._inflate(src, out, outOff) -> bytes produced into out at outOff.
 //  Throws NOROOM-style on a too-small out so the JS sugar grows and retries.
 static JABC_FN(JABCzipInflate) {
   if (argc < 3) JABC_THROW("zip._inflate(src, out, outOff)");
-  u8s src = {}, out = {};
-  if (!JABCBytesOf(src, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(out, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[2], exception);
-  if (*exception) return JSValueMakeUndefined(ctx);
-  if (off > (size_t)$len(out)) JABC_THROW("zip.inflate: outOff past end");
-  u8s into = {out[0] + off, out[1]};
-  size_t room = (size_t)$len(into);
+  u8* srcb[4] = {};
+  u8* outb[4] = {};
+  if (!JABCDataOf(srcb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[2], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  size_t before = u8bDataLen(outb);
+  size_t room = u8bIdleLen(outb);
+  u8* head = u8bIdle(outb)[0];
   u8 sentinel = 0;
-  if (room) { sentinel = (u8)(into[0][0] ^ 0xa5); into[0][0] = sentinel; }
-  u8cs s = {src[0], src[1]};
-  if (ZINFInflate(into, s) != OK) JABC_THROW("zip.inflate: bad zlib stream");
-  size_t produced = (size_t)(into[0] - (out[0] + off));
+  if (room) { sentinel = (u8)(head[0] ^ 0xa5); head[0] = sentinel; }
+  if (ZINFInflate(u8bIdle(outb), u8bDataC(srcb)) != OK)
+    JABC_THROW("zip.inflate: bad zlib stream");
+  size_t produced = u8bDataLen(outb) - before;
   //  produced 0 + a non-empty out region whose head was overwritten == ZINF
   //  wrapped (out too small): throw so the sugar grows.  Head intact == a
   //  genuine empty result.
-  if (produced == 0 && room && (out[0] + off)[0] != sentinel)
+  if (produced == 0 && room && head[0] != sentinel)
     JABC_THROW("zip.inflate: NOROOM (out too small)");
   return JSValueMakeNumber(ctx, (double)produced);
 }

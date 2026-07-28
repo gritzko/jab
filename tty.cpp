@@ -52,13 +52,11 @@ static JABC_FN(JABCttyCook) {
   if (argc < 2) JABC_THROW("tty.cook(fd, savedTermios)");
   int fd = JABCttyInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s saved = {};
-  if (!JABCBytesOf(saved, ctx, args[1], exception))
-    return JSValueMakeUndefined(ctx);
-  if ((size_t)$len(saved) != ANSITtyTermiosSize())
+  u8* savedb[4] = {};
+  if (!JABCDataOf(savedb, ctx, args[1], exception)) JABC_UNDEF;
+  if (u8bDataLen(savedb) != ANSITtyTermiosSize())
     JABC_THROW("tty.cook: saved termios has wrong size");
-  u8cs in = {saved[0], saved[1]};
-  if (ANSICook(fd, in) != OK) JABC_THROW(strerror(errno));
+  if (ANSICook(fd, u8bDataC(savedb)) != OK) JABC_THROW(strerror(errno));
   JABC_UNDEF;
 }
 

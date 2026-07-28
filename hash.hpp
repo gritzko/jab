@@ -154,12 +154,11 @@ fun b8 sha256hashEq(sha256 const* a, sha256 const* b) {
 //  get returns a fresh Uint8Array copy of the stored element.
 #define HASH_BLOB_RD                                                          \
   {                                                                           \
-    u8s _b = {};                                                              \
-    if (!JABCBytesOf(_b, ctx, args[1], exception))                            \
-      return JSValueMakeUndefined(ctx);                                      \
-    if ((size_t)$len(_b) != sizeof(v))                                        \
+    u8* _bb[4] = {};                                                          \
+    if (!JABCDataOf(_bb, ctx, args[1], exception)) JABC_UNDEF;                \
+    if (u8bDataLen(_bb) != sizeof(v))                                         \
       JABC_THROW("hash: blob size");                                          \
-    memcpy(v.data, _b[0], sizeof(v));                                         \
+    memcpy(v.data, u8bData(_bb)[0], sizeof(v));                               \
   }
 #define HASH_BLOB(LANE)                                                       \
   HASH_DEF(LANE, 2, 2, HASH_BLOB_RD, HASH_BLOB_RD,                            \

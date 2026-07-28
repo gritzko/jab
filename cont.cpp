@@ -238,17 +238,32 @@ static const char* JABC_CONT_JS = R"JS(
     P.seek = function (off) {
       if (typeof off !== "number") throw "PACK addresses by offset, not sha";
       const e = abc._pack_next(this, off, this.buffer.watermark | 0);
-      if (e < 0) return false;
+      //  PTR-010: a rejected offset UNPOSITIONS the cursor — leaving the old
+      //  `_rec` (or the initial -1) is what fed -1 to the size getter and
+      //  read a byte below the mapping.  Callers that ignore `false` now see
+      //  undefined, not a wild read.
+      if (e < 0) { this._rec = -1; return false; }
       this._rec = off; this._read = e; return true;
     };
+    //  Positioned? Every record getter is undefined on an unpositioned cursor.
+    P._at = function () { return (this._rec | 0) >= 0; };
     Object.defineProperty(P, "count", { get() { return abc._pack_count(this); } });
     Object.defineProperty(P, "offset", { get() { return this._rec; } });
-    Object.defineProperty(P, "type", { get() { return N2T[abc._pack_type(this, this._rec)]; } });
-    Object.defineProperty(P, "size", { get() { return abc._pack_size(this, this._rec); } });
-    Object.defineProperty(P, "baseOffset", {
-      get() { const b = abc._pack_baseoff(this, this._rec); return b < 0 ? undefined : b; }
+    Object.defineProperty(P, "type", {
+      get() { return this._at() ? N2T[abc._pack_type(this, this._rec)] : undefined; }
     });
-    Object.defineProperty(P, "ref", { get() { return abc._pack_ref(this, this._rec); } });
+    Object.defineProperty(P, "size", {
+      get() { return this._at() ? abc._pack_size(this, this._rec) : undefined; }
+    });
+    Object.defineProperty(P, "baseOffset", {
+      get() {
+        if (!this._at()) return undefined;
+        const b = abc._pack_baseoff(this, this._rec); return b < 0 ? undefined : b;
+      }
+    });
+    Object.defineProperty(P, "ref", {
+      get() { return this._at() ? abc._pack_ref(this, this._rec) : undefined; }
+    });
     P.inflate = function (out) {
       out.fed(abc._pack_inflate(this, this._rec, out.idle(), 0));
       return out;

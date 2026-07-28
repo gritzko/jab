@@ -496,10 +496,11 @@ static JABC_FN(JABCioRead) {
   if (argc < 2) JABC_THROW("io._read(fd, Uint8Array)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCIdleOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   ssize_t n;
-  do { n = read(fd, ta[0], $len(ta)); } while (n < 0 && errno == EINTR);
+  do { n = read(fd, u8bIdle(tab)[0], u8bIdleLen(tab)); }
+  while (n < 0 && errno == EINTR);
   if (n < 0) JABC_THROW(strerror(errno));
   return JSValueMakeNumber(ctx, (double)n);
 }
@@ -509,10 +510,11 @@ static JABC_FN(JABCioWrite) {
   if (argc < 2) JABC_THROW("io._write(fd, Uint8Array)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCDataOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   ssize_t n;
-  do { n = write(fd, ta[0], $len(ta)); } while (n < 0 && errno == EINTR);
+  do { n = write(fd, u8bData(tab)[0], u8bDataLen(tab)); }
+  while (n < 0 && errno == EINTR);
   if (n < 0) JABC_THROW(strerror(errno));
   return JSValueMakeNumber(ctx, (double)n);
 }
@@ -600,9 +602,9 @@ static JABC_FN(JABCioMmap) {
 //  already-released mapping.  The GC finalizer stays as an idempotent backstop.
 static JABC_FN(JABCioMunmap) {
   if (argc < 1) JABC_THROW("io._munmap(Uint8Array)");
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  FILEUnMapBase(ta[0]);
+  u8* tab[4] = {};
+  if (!JABCDataOf(tab, ctx, args[0], exception)) JABC_UNDEF;
+  FILEUnMapBase(u8bData(tab)[0]);
   JABC_UNDEF;
 }
 
@@ -643,9 +645,10 @@ static JABC_FN(JABCioRam) {
 //  no buffer-descriptor lookup needed).
 static JABC_FN(JABCioMsync) {
   if (argc < 1) JABC_THROW("io._msync(Uint8Array)");
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if ($len(ta) && msync(ta[0], $len(ta), MS_SYNC) != 0)
+  u8* tab[4] = {};
+  if (!JABCDataOf(tab, ctx, args[0], exception)) JABC_UNDEF;
+  if (u8bDataLen(tab) &&
+      msync(u8bData(tab)[0], u8bDataLen(tab), MS_SYNC) != 0)
     JABC_THROW(strerror(errno));
   JABC_UNDEF;
 }
@@ -936,10 +939,9 @@ static JABC_FN(JABCioLog) {
       JSStringRelease(s);
     } else if (JSValueGetTypedArrayType(ctx, args[i], NULL) !=
                kJSTypedArrayTypeNone) {
-      u8s ta = {};
-      if (!JABCBytesOf(ta, ctx, args[i], exception))
-        return JSValueMakeUndefined(ctx);
-      ssize_t w = write(STDERR_FILENO, ta[0], $len(ta));
+      u8* tab[4] = {};
+      if (!JABCDataOf(tab, ctx, args[i], exception)) JABC_UNDEF;
+      ssize_t w = write(STDERR_FILENO, u8bData(tab)[0], u8bDataLen(tab));
       (void)w;
     }
   }

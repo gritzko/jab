@@ -75,9 +75,9 @@ static b8 JABCulogUriGate(ulogrecp rec, u8s us) {
 //  _ulog_feed(buf, off, verb, uri, ts) -> new write head
 static JABC_FN(JABCulogFeed) {
   if (argc < 4) JABC_THROW("ulog._feed(buf, off, verb, uri, ts)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
+  u8* c[4] = {};
+  if (!JABCIdleOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCBufFed(c, ctx, args[1], exception)) JABC_UNDEF;   //  DATA = [0,off)
   u8 vb[16], ub[FILE_PATH_MAX_LEN];
   u8s vs = {}, us = {};
   if (!JABCArgU8(vs, ctx, args[2], vb, sizeof(vb), exception)) return JSValueMakeUndefined(ctx);
@@ -92,9 +92,8 @@ static JABC_FN(JABCulogFeed) {
   rec.ts = (ron60)ts;
   rec.verb = verb;
   if (!JABCulogUriGate(&rec, us)) JABC_THROW("ulog._feed: malformed uri");
-  u8s into = {c[0] + off, c[1]};
-  if (ULOGu8sFeed(into, &rec) != OK) JABC_THROW("ulog: feed (full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - c[0]));
+  if (ULOGu8sFeed(u8bIdle(c), &rec) != OK) JABC_THROW("ulog: feed (full?)");
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(c));
 }
 
 //  _ulog_now() -> BigInt ron60 (a fresh monotonic stamp)
@@ -105,34 +104,39 @@ static JABC_FN(JABCulogNow) {
 //  _ulog_next(buf, off, dataLen) -> end of the row at off | -1
 static JABC_FN(JABCulogNext) {
   if (argc < 3) JABC_THROW("ulog._next(buf, off, dataLen)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  size_t dl = (size_t)JSValueToNumber(ctx, args[2], exception);
+  u8* c[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  size_t off = 0, dl = 0;
+  if (!JABCOffOf(&off, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCOffOf(&dl, u8bDataC(c), ctx, args[2], exception)) JABC_UNDEF;
   if (off >= dl) return JSValueMakeNumber(ctx, -1);
-  u8cs scan = {c[0] + off, c[0] + dl};
+  u8cs scan = {};                        //  [off, dl) — abc bounds-checks
+  if (dl > 0xffffffffUL ||
+      u8csSub(u8bDataC(c), scan, (u32)off, (u32)dl) != OK)
+    JABC_THROW("ulog: the row range is out of range");
   ulogrec rec = {};
   if (ULOGu8sDrain(scan, &rec) != OK) return JSValueMakeNumber(ctx, -1);
-  return JSValueMakeNumber(ctx, (double)(size_t)((u8c*)scan[0] - c[0]));
+  return JSValueMakeNumber(ctx, (double)(size_t)(scan[0] - u8bDataC(c)[0]));
 }
 
-static b8 JABCulogAt(ulogrec* rec, u8s c, JSContextRef ctx, JSValueRef bufv,
+//  PTR-010: the JABCpackAt twin — gate the offset, move DATA with u8bUsed.
+static b8 JABCulogAt(ulogrec* rec, u8* c[4], JSContextRef ctx, JSValueRef bufv,
                      JSValueRef offv, JSValueRef* ex) {
-  if (!JABCBytesOf(c, ctx, bufv, ex)) return NO;
-  size_t off = (size_t)JSValueToNumber(ctx, offv, ex);
-  u8cs scan = {c[0] + off, c[1]};
+  if (!JABCDataOf(c, ctx, bufv, ex)) return NO;
+  if (!JABCBufAt(c, ctx, offv, ex)) return NO;
+  a_dup(u8 const, scan, u8bDataC(c));   //  drain a copy: keep DATA put
   return ULOGu8sDrain(scan, rec) == OK;
 }
 
 static JABC_FN(JABCulogTime) {
-  u8s c = {};
+  u8* c[4] = {};
   ulogrec rec = {};
   if (argc < 2 || !JABCulogAt(&rec, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
   return JSBigIntCreateWithUInt64(ctx, (uint64_t)rec.ts, exception);
 }
 static JABC_FN(JABCulogVerb) {
-  u8s c = {};
+  u8* c[4] = {};
   ulogrec rec = {};
   if (argc < 2 || !JABCulogAt(&rec, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
@@ -144,7 +148,7 @@ static JABC_FN(JABCulogVerb) {
   return JABCStrOfSlice(ctx, vs, exception);
 }
 static JABC_FN(JABCulogUri) {
-  u8s c = {};
+  u8* c[4] = {};
   ulogrec rec = {};
   if (argc < 2 || !JABCulogAt(&rec, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
@@ -204,10 +208,11 @@ static size_t JABCulogScan(u8* base, size_t off, size_t dl, b8 rev, int kind,
 //  Common prologue for the seek leaves: (buf, off, dataLen, arg, rev).
 #define ULOG_SEEK_HEAD()                                                     \
   if (argc < 4) JABC_THROW("ulog._seek(buf, off, dataLen, arg, rev)");       \
-  u8s c = {};                                                                \
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx); \
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);             \
-  size_t dl = (size_t)JSValueToNumber(ctx, args[2], exception);              \
+  u8* c[4] = {};                                                             \
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;                   \
+  size_t off = 0, dl = 0;                                                    \
+  if (!JABCOffOf(&off, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;    \
+  if (!JABCOffOf(&dl, u8bDataC(c), ctx, args[2], exception)) JABC_UNDEF;     \
   b8 rev = argc > 4 && JSValueToBoolean(ctx, args[4])
 #define ULOG_SEEK_RET(M) \
   do { size_t m_ = (M); return JSValueMakeNumber(ctx, m_ == (size_t)-1 ? -1 : (double)m_); } while (0)
@@ -221,12 +226,12 @@ static JABC_FN(JABCulogSeekVerb) {
   ron60 target = 0;
   u8cs vsc = {vs[0], vs[1]};
   RONutf8sDrain(&target, vsc);
-  ULOG_SEEK_RET(JABCulogScan(c[0], off, dl, rev, 0, target, 0, NULL, 0));
+  ULOG_SEEK_RET(JABCulogScan(u8bData(c)[0], off, dl, rev, 0, target, 0, NULL, 0));
 }
 static JABC_FN(JABCulogSeekTime) {
   ULOG_SEEK_HEAD();
   u64 target = JSValueToUInt64(ctx, args[3], exception);
-  ULOG_SEEK_RET(JABCulogScan(c[0], off, dl, rev, 1, 0, target, NULL, 0));
+  ULOG_SEEK_RET(JABCulogScan(u8bData(c)[0], off, dl, rev, 1, 0, target, NULL, 0));
 }
 static JABC_FN(JABCulogSeekURI) {
   ULOG_SEEK_HEAD();
@@ -234,7 +239,7 @@ static JABC_FN(JABCulogSeekURI) {
   u8s ps = {};
   if (!JABCArgU8(ps, ctx, args[3], pb, sizeof(pb), exception))
     return JSValueMakeUndefined(ctx);
-  ULOG_SEEK_RET(JABCulogScan(c[0], off, dl, rev, 2, 0, 0, ps[0], (size_t)$len(ps)));
+  ULOG_SEEK_RET(JABCulogScan(u8bData(c)[0], off, dl, rev, 2, 0, 0, ps[0], (size_t)$len(ps)));
 }
 
 //  --- booked-log + sidecar-index bindings (approach-(a) prep) ----------

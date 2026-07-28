@@ -16,14 +16,13 @@ extern "C" {
 //  hex.encode(Uint8Array) -> lowercase hex string
 static JABC_FN(JABChexEncode) {
   if (argc < 1) JABC_THROW("hex.encode(Uint8Array)");
-  u8s bin = {};
-  if (!JABCBytesOf(bin, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t n = (size_t)$len(bin);
+  u8* binb[4] = {};
+  if (!JABCDataOf(binb, ctx, args[0], exception)) JABC_UNDEF;
+  size_t n = u8bDataLen(binb);
   char* h = (char*)malloc(n * 2 + 1);
   if (h == NULL) JABC_THROW("hex.encode: oom");
   u8s hx = {(u8*)h, (u8*)h + n * 2};
-  u8cs b = {bin[0], bin[1]};
-  HEXu8sFeedSome(hx, b);
+  HEXu8sFeedSome(hx, u8bDataC(binb));
   h[n * 2] = 0;
   JSStringRef js = JSStringCreateWithUTF8CString(h);
   free(h);
@@ -35,13 +34,12 @@ static JABC_FN(JABChexEncode) {
 //  hex.encodeInto(src, dst) -> hex chars written (provided-buffer form)
 static JABC_FN(JABChexEncodeInto) {
   if (argc < 2) JABC_THROW("hex.encodeInto(src, dst)");
-  u8s bin = {}, dst = {};
-  if (!JABCBytesOf(bin, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(dst, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  u8s hx = {dst[0], dst[1]};
-  u8cs b = {bin[0], bin[1]};
-  HEXu8sFeedSome(hx, b);
-  return JSValueMakeNumber(ctx, (double)(size_t)(hx[0] - dst[0]));
+  u8* binb[4] = {};
+  u8* dstb[4] = {};
+  if (!JABCDataOf(binb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(dstb, ctx, args[1], exception)) JABC_UNDEF;
+  HEXu8sFeedSome(u8bIdle(dstb), u8bDataC(binb));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(dstb));
 }
 
 //  hex.decode(string) -> Uint8Array
@@ -73,22 +71,20 @@ static JABC_FN(JABChexDecode) {
 //  sha1(Uint8Array) -> Uint8Array(20)
 static JABC_FN(JABCsha1) {
   if (argc < 1) JABC_THROW("sha1(Uint8Array)");
-  u8s bin = {};
-  if (!JABCBytesOf(bin, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* binb[4] = {};
+  if (!JABCDataOf(binb, ctx, args[0], exception)) JABC_UNDEF;
   sha1 h = {};
-  u8cs from = {bin[0], bin[1]};
-  SHA1Sum(&h, from);
+  SHA1Sum(&h, u8bDataC(binb));
   return JABCBlob(ctx, h.data, sizeof(h.data));
 }
 
 //  sha256(Uint8Array) -> Uint8Array(32)
 static JABC_FN(JABCsha256) {
   if (argc < 1) JABC_THROW("sha256(Uint8Array)");
-  u8s bin = {};
-  if (!JABCBytesOf(bin, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* binb[4] = {};
+  if (!JABCDataOf(binb, ctx, args[0], exception)) JABC_UNDEF;
   sha256 h = {};
-  u8cs from = {bin[0], bin[1]};
-  SHASum(&h, from);
+  SHASum(&h, u8bDataC(binb));
   return JABCBlob(ctx, h.data, sizeof(h.data));
 }
 

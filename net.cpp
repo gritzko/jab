@@ -84,10 +84,11 @@ static JABC_FN(JABCNetRecv) {
   if (argc < 2) JABC_THROW("net._recv(fd, Uint8Array)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCIdleOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   ssize_t n;
-  do { n = recv(fd, ta[0], $len(ta), 0); } while (n < 0 && errno == EINTR);
+  do { n = recv(fd, u8bIdle(tab)[0], u8bIdleLen(tab), 0); }
+  while (n < 0 && errno == EINTR);
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return JSValueMakeNumber(ctx, -1);
     JABC_THROW(strerror(errno));
@@ -101,10 +102,11 @@ static JABC_FN(JABCNetSend) {
   if (argc < 2) JABC_THROW("net._send(fd, Uint8Array)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCDataOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   ssize_t n;
-  do { n = send(fd, ta[0], $len(ta), MSG_NOSIGNAL); } while (n < 0 && errno == EINTR);
+  do { n = send(fd, u8bData(tab)[0], u8bDataLen(tab), MSG_NOSIGNAL); }
+  while (n < 0 && errno == EINTR);
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return JSValueMakeNumber(ctx, -1);
     JABC_THROW(strerror(errno));
@@ -146,23 +148,18 @@ static JABC_FN(JABCDgramBind) {
   return JSValueMakeNumber(ctx, (double)fd);
 }
 
-static void JABCSetProp(JSContextRef ctx, JSObjectRef o, const char* k, JSValueRef v) {
-  JSStringRef s = JSStringCreateWithUTF8CString(k);
-  JSObjectSetProperty(ctx, o, s, v, kJSPropertyAttributeNone, NULL);
-  JSStringRelease(s);
-}
-
 //  dgram._recv(fd, u8) -> {n, address, port}, or null if nothing pending
 static JABC_FN(JABCDgramRecv) {
   if (argc < 2) JABC_THROW("dgram._recv(fd, Uint8Array)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCIdleOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   struct sockaddr_storage ss;
   socklen_t sl = sizeof(ss);
   ssize_t n;
-  do { n = recvfrom(fd, ta[0], $len(ta), 0, (struct sockaddr*)&ss, &sl); }
+  do { n = recvfrom(fd, u8bIdle(tab)[0], u8bIdleLen(tab), 0,
+                    (struct sockaddr*)&ss, &sl); }
   while (n < 0 && errno == EINTR);
   if (n < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) return JSValueMakeNull(ctx);
@@ -183,8 +180,8 @@ static JABC_FN(JABCDgramSend) {
   if (argc < 4) JABC_THROW("dgram._send(fd, u8, host, port)");
   int fd = JABCInt(ctx, args[0], exception);
   if (*exception) return JSValueMakeUndefined(ctx);
-  u8s ta = {};
-  if (!JABCBytesOf(ta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* tab[4] = {};
+  if (!JABCDataOf(tab, ctx, args[1], exception)) JABC_UNDEF;
   char host[NETmaxhost] = "", port[NETmaxserv] = "";
   if (JABCUri(host, sizeof(host), ctx, args[2]) == 0) JABC_THROW("dgram._send: bad host");
   int p = JABCInt(ctx, args[3], exception);
@@ -196,7 +193,8 @@ static JABC_FN(JABCDgramSend) {
   if (getaddrinfo(host, port, &hints, &res) != 0 || res == NULL)
     JABC_THROW("dgram._send: resolve failed");
   ssize_t n;
-  do { n = sendto(fd, ta[0], $len(ta), 0, res->ai_addr, res->ai_addrlen); }
+  do { n = sendto(fd, u8bData(tab)[0], u8bDataLen(tab), 0, res->ai_addr,
+                  res->ai_addrlen); }
   while (n < 0 && errno == EINTR);
   freeaddrinfo(res);
   if (n < 0) {

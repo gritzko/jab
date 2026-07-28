@@ -81,8 +81,9 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
       JABC_THROW("_seekrange_" #L "(runs[], lo…, hi…, cb)");                  \
     JSObjectRef arr = (JSObjectRef)args[0];                                   \
     JSStringRef lk = JSStringCreateWithUTF8CString("length");                 \
-    size_t N = (size_t)JSValueToNumber(                                       \
-        ctx, JSObjectGetProperty(ctx, arr, lk, exception), exception);        \
+    u64 N = 0;                                                                \
+    if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
+                   exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
     if (N > 64) JABC_THROW("_seekrange: too many runs (max 64)");             \
     L lo = RDLO, hi = RDHI;                                                   \
@@ -96,9 +97,9 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \
           JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);       \
-      u8s b = {};                                                             \
-      if (!JABCBytesOf(b, ctx, el, exception))                                \
-        return JSValueMakeUndefined(ctx);                                     \
+      u8* bb[4] = {};                                                         \
+      if (!JABCDataOf(bb, ctx, el, exception)) JABC_UNDEF;                    \
+      u8 const* const* b = u8bDataC(bb);                                      \
       ent[i][0] = (const L*)b[0];                                             \
       ent[i][1] = (const L*)b[1];                                             \
     }                                                                         \
@@ -137,23 +138,24 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
       JABC_THROW("_compact_" #L "(runs[], out)");                            \
     JSObjectRef arr = (JSObjectRef)args[0];                                   \
     JSStringRef lk = JSStringCreateWithUTF8CString("length");                 \
-    size_t N = (size_t)JSValueToNumber(                                       \
-        ctx, JSObjectGetProperty(ctx, arr, lk, exception), exception);        \
+    u64 N = 0;                                                                \
+    if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
+                   exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
     if (N > 64) JABC_THROW("_compact: too many runs (max 64)");               \
     L##cs ent[64];                                                            \
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \
           JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);       \
-      u8s b = {};                                                             \
-      if (!JABCBytesOf(b, ctx, el, exception))                                \
-        return JSValueMakeUndefined(ctx);                                     \
+      u8* bb[4] = {};                                                         \
+      if (!JABCDataOf(bb, ctx, el, exception)) JABC_UNDEF;                    \
+      u8 const* const* b = u8bDataC(bb);                                      \
       ent[i][0] = (const L*)b[0];                                             \
       ent[i][1] = (const L*)b[1];                                             \
     }                                                                         \
-    u8s d = {};                                                               \
-    if (!JABCBytesOf(d, ctx, args[1], exception))                             \
-      return JSValueMakeUndefined(ctx);                                       \
+    u8* db4[4] = {};                                                          \
+    if (!JABCDataOf(db4, ctx, args[1], exception)) JABC_UNDEF;                \
+    u8* const* d = u8bData(db4);                                              \
     L* base = (L*)d[0];                                                       \
     L##s into = {base, (L*)d[1]};                                            \
     L##css stack = {ent, ent + N};                                           \

@@ -62,7 +62,8 @@ extern "C" {
     size_t cap;                                                             \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))    \
       return JSValueMakeUndefined(ctx);                                      \
-    size_t n = (size_t)JSValueToNumber(ctx, args[1], exception);             \
+    u64 n = 0;                                                               \
+    if (!JABCu64Of(&n, ctx, args[1], exception)) JABC_UNDEF;                 \
     if (n >= cap) JABC_THROW("heap: full");                                  \
     LANE v;                                                                  \
     RDV;                                                                     \
@@ -77,7 +78,11 @@ extern "C" {
     size_t cap;                                                             \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))    \
       return JSValueMakeUndefined(ctx);                                      \
-    size_t n = (size_t)JSValueToNumber(ctx, args[1], exception);             \
+    u64 n = 0;                                                               \
+    if (!JABCu64Of(&n, ctx, args[1], exception)) JABC_UNDEF;                 \
+    /* PTR-010: bound the watermark — `bb + n` past the array was a wild    \
+       pointer for any n > cap (a -1 cast to size_t included). */           \
+    if (n > cap) JABC_THROW("heap: the watermark is past the end");          \
     if (n == 0) return JSValueMakeUndefined(ctx);                            \
     LANE* bb = (LANE*)base;                                                  \
     LANE* buf[4] = {bb, bb, bb + n, bb + cap};                              \
@@ -96,15 +101,16 @@ extern "C" {
     size_t cap;                                                               \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(LANE), exception))     \
       return JSValueMakeUndefined(ctx);                                       \
-    size_t n = (size_t)JSValueToNumber(ctx, args[1], exception);              \
-    u8s eb = {};                                                              \
-    if (!JABCBytesOf(eb, ctx, args[2], exception))                            \
-      return JSValueMakeUndefined(ctx);                                       \
-    size_t m = (size_t)$len(eb) / sizeof(LANE);                               \
-    if ((size_t)$len(eb) != m * sizeof(LANE)) JABC_THROW("heap: feed align"); \
+    u64 n = 0;                                                                \
+    if (!JABCu64Of(&n, ctx, args[1], exception)) JABC_UNDEF;                  \
+    u8* ebb[4] = {};                                                          \
+    if (!JABCDataOf(ebb, ctx, args[2], exception)) JABC_UNDEF;                \
+    u8 const* const* eb = u8bDataC(ebb);                                      \
+    size_t m = u8bDataLen(ebb) / sizeof(LANE);                                \
+    if (u8bDataLen(ebb) != m * sizeof(LANE)) JABC_THROW("heap: feed align");  \
     if (n > cap || m > cap - n) JABC_THROW("heap: full");                     \
     LANE* bb = (LANE*)base;                                                   \
-    if ((u8*)bb < eb[1] && eb[0] < (u8*)(bb + cap))                           \
+    if ((u8c*)bb < eb[1] && eb[0] < (u8c*)(bb + cap))                         \
       JABC_THROW("heap: feed overlap");                                      \
     LANE* buf[4] = {bb, bb, bb + n, bb + cap};                                \
     const LANE* e = (const LANE*)eb[0];                                       \
@@ -141,12 +147,11 @@ extern "C" {
 #define HEAP_BLOB(LANE)                                                       \
   HEAP_DEF(LANE, 3,                                                           \
            {                                                                  \
-             u8s _b = {};                                                     \
-             if (!JABCBytesOf(_b, ctx, args[2], exception))                   \
-               return JSValueMakeUndefined(ctx);                             \
-             if ((size_t)$len(_b) != sizeof(LANE))                            \
+             u8* _bb[4] = {};                                                 \
+             if (!JABCDataOf(_bb, ctx, args[2], exception)) JABC_UNDEF;       \
+             if (u8bDataLen(_bb) != sizeof(LANE))                             \
                JABC_THROW("heap: blob size");                                 \
-             memcpy(v.data, _b[0], sizeof(LANE));                             \
+             memcpy(v.data, u8bData(_bb)[0], sizeof(LANE));                   \
            },                                                                 \
            JABCBlob(ctx, v.data, sizeof(LANE)))
 

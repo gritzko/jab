@@ -47,7 +47,7 @@ include_directories(
 # node codegen step (node is not a build dependency).
 # abc/POL.c (pol) and NET/TCP/UDP.c (net/dgram) are stripped from abc-core
 # (grouped with CURL); compile them straight into jab for the socket/loop leaves.
-set(JABC_SRC main.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp
+set(JABC_SRC main.cpp arg.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp
     pol.cpp ${ABC_DIR}/POL.c net.cpp ${ABC_DIR}/NET.c ${ABC_DIR}/TCP.c ${ABC_DIR}/UDP.c)
 
 # JAB-001: the runtime binary is `jab` — a standalone runner divorced from `be`
@@ -58,7 +58,7 @@ set_target_properties(jab PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${DOG_BIN_DIR})
 
 # Table-driven C++ harness over the buf/utf8/io boundary; returns non-zero on
 # any failed row, so CTest fails on a real bug (CLAUDE.md §3).
-add_executable(jabc_test test/jabc_test.cpp io.cpp utf8.cpp buf.cpp codec.cpp)
+add_executable(jabc_test test/jabc_test.cpp arg.cpp io.cpp utf8.cpp buf.cpp codec.cpp)
 target_link_libraries(jabc_test ${JSC_LIB} dog abc)
 
 add_test(NAME JABCtestCpp COMMAND jabc_test)

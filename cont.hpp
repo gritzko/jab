@@ -10,13 +10,13 @@
 #include "JABC.hpp"
 
 //  A lane array's backing: base pointer + capacity in ELEMENTS (offset-
-//  adjusted via JABCBytesOf).  `esz` is sizeof(lane).
+//  adjusted via JABCDataOf).  `esz` is sizeof(lane).
 static inline bool JABCLaneArr(void** base, size_t* cap, JSContextRef ctx,
                                JSValueRef arg, size_t esz, JSValueRef* ex) {
-  u8s b = {};
-  if (!JABCBytesOf(b, ctx, arg, ex)) return false;
-  *base = (void*)b[0];
-  *cap = (size_t)$len(b) / esz;
+  u8* b[4] = {};
+  if (!JABCDataOf(b, ctx, arg, ex)) return false;
+  *base = (void*)u8bData(b)[0];
+  *cap = u8bDataLen(b) / esz;
   return true;
 }
 

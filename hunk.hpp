@@ -29,7 +29,13 @@ static inline bool JABCArgU8(u8s out, JSContextRef ctx, JSValueRef v, u8* tmp,
     out[1] = tmp + (n ? n - 1 : 0);
     return true;
   }
-  return JABCBytesOf(out, ctx, v, ex);
+  //  PTR-010: a typed-array arg — DATA is the whole view, copied out flat
+  //  because the caller only reads it (hunk fields are plain slices).
+  u8* b[4] = {};
+  if (!JABCDataOf(b, ctx, v, ex)) return false;
+  out[0] = u8bData(b)[0];
+  out[1] = u8bData(b)[1];
+  return true;
 }
 
 //  A no-copy Uint8Array view over `ta`'s backing at [off, off+len).
@@ -47,15 +53,19 @@ static inline JSValueRef JABCSubU8(JSContextRef ctx, JSValueRef ta, size_t off,
 //  _hunk_feed(buf, off, uri, text, toks) -> newoff
 static JABC_FN(JABChunkFeed) {
   if (argc < 5) JABC_THROW("hunk.feed(buf, off, uri, text, toks)");
-  u8s buf = {};
-  if (!JABCBytesOf(buf, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
+  u8* buf[4] = {};
+  if (!JABCIdleOf(buf, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCBufFed(buf, ctx, args[1], exception)) JABC_UNDEF;  //  DATA = [0,off)
   u8 uritmp[FILE_PATH_MAX_LEN];
-  u8s uri = {}, text = {}, toks = {};
+  u8s uri = {};
+  u8* textb[4] = {};
+  u8* toksb[4] = {};
   if (!JABCArgU8(uri, ctx, args[2], uritmp, sizeof(uritmp), exception))
     return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(text, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(toks, ctx, args[4], exception)) return JSValueMakeUndefined(ctx);
+  if (!JABCDataOf(textb, ctx, args[3], exception)) JABC_UNDEF;
+  if (!JABCDataOf(toksb, ctx, args[4], exception)) JABC_UNDEF;
+  u8 const* const* text = u8bDataC(textb);
+  u8 const* const* toks = u8bDataC(toksb);
   hunk hk = {};
   hk.uri[0] = uri[0];   hk.uri[1] = uri[1];
   hk.text[0] = text[0]; hk.text[1] = text[1];
@@ -63,9 +73,8 @@ static JABC_FN(JABChunkFeed) {
   //  JS-092: the END is the toks BYTE-end (toks[1]), not start + tok COUNT — the
   //  old `toks[0] + $len/sizeof` advanced a u8* by the count, a quarter the size.
   hk.toks[1] = (tok32c*)toks[1];
-  u8s into = {buf[0] + off, buf[1]};
-  if (HUNKu8sFeed(into, &hk) != OK) JABC_THROW("hunk.feed: out full");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - buf[0]));
+  if (HUNKu8sFeed(u8bIdle(buf), &hk) != OK) JABC_THROW("hunk.feed: out full");
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(buf));
 }
 
 //  _hunk_dogenize(buf, off, source, ext, uri) -> newoff
@@ -74,10 +83,12 @@ static JABC_FN(JABChunkFeed) {
 //  the call and freed before return — nothing is held, nothing crosses to JS.
 static JABC_FN(JABChunkDogenize) {
   if (argc < 4) JABC_THROW("hunk.dogenize(buf, off, source, ext, uri)");
-  u8s buf = {}, source = {};
-  if (!JABCBytesOf(buf, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  if (!JABCBytesOf(source, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
+  u8* buf[4] = {};
+  u8* sourceb[4] = {};
+  if (!JABCIdleOf(buf, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCBufFed(buf, ctx, args[1], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  if (!JABCDataOf(sourceb, ctx, args[2], exception)) JABC_UNDEF;
+  u8 const* const* source = u8bDataC(sourceb);
   u8 exttmp[64], uritmp[FILE_PATH_MAX_LEN];
   u8s ext = {}, uri = {};
   if (!JABCArgU8(ext, ctx, args[3], exttmp, sizeof(exttmp), exception))
@@ -99,34 +110,38 @@ static JABC_FN(JABChunkDogenize) {
   hk.text[0] = source[0]; hk.text[1] = source[1];
   hk.toks[0] = (tok32c*)tb[1];
   hk.toks[1] = (tok32c*)tb[2];
-  u8s into = {buf[0] + off, buf[1]};
-  o = HUNKu8sFeed(into, &hk);
+  o = HUNKu8sFeed(u8bIdle(buf), &hk);
   free(tm);
   if (o != OK) JABC_THROW("hunk.dogenize: out full");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - buf[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(buf));
 }
 
 //  _hunk_next(buf, readOff, dataLen) -> recEnd | -1
 static JABC_FN(JABChunkNext) {
   if (argc < 3) JABC_THROW("hunk._next(buf, readOff, dataLen)");
-  u8s buf = {};
-  if (!JABCBytesOf(buf, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t r = (size_t)JSValueToNumber(ctx, args[1], exception);
-  size_t dl = (size_t)JSValueToNumber(ctx, args[2], exception);
+  u8* buf[4] = {};
+  if (!JABCDataOf(buf, ctx, args[0], exception)) JABC_UNDEF;
+  size_t r = 0, dl = 0;
+  if (!JABCOffOf(&r, u8bDataC(buf), ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCOffOf(&dl, u8bDataC(buf), ctx, args[2], exception)) JABC_UNDEF;
   if (r >= dl) return JSValueMakeNumber(ctx, -1);
-  u8cs from = {buf[0] + r, buf[0] + dl};
+  u8cs from = {};                        //  [r, dl) — abc bounds-checks
+  if (dl > 0xffffffffUL ||
+      u8csSub(u8bDataC(buf), from, (u32)r, (u32)dl) != OK)
+    JABC_THROW("hunk: the record range is out of range");
   hunk hk = {};
   if (HUNKu8sDrain(from, &hk) != OK) return JSValueMakeNumber(ctx, -1);
-  return JSValueMakeNumber(ctx, (double)(size_t)((u8c*)from[0] - buf[0]));
+  return JSValueMakeNumber(ctx, (double)(size_t)(from[0] - u8bDataC(buf)[0]));
 }
 
 //  Drain the record at recOff; the field accessors below re-drain (cheap TLV
 //  walk) so no hunk state is held between calls.
-static bool JABChunkAt(hunk* hk, u8s buf, JSContextRef ctx, JSValueRef bufv,
+//  PTR-010: the JABCpackAt twin — gate the offset, move DATA with u8bUsed.
+static bool JABChunkAt(hunk* hk, u8* buf[4], JSContextRef ctx, JSValueRef bufv,
                        JSValueRef offv, JSValueRef* ex) {
-  if (!JABCBytesOf(buf, ctx, bufv, ex)) return false;
-  size_t rec = (size_t)JSValueToNumber(ctx, offv, ex);
-  u8cs from = {buf[0] + rec, buf[1]};
+  if (!JABCDataOf(buf, ctx, bufv, ex)) return false;
+  if (!JABCBufAt(buf, ctx, offv, ex)) return false;
+  a_dup(u8 const, from, u8bDataC(buf));  //  drain a copy: keep DATA put
   return HUNKu8sDrain(from, hk) == OK;
 }
 
@@ -192,22 +207,22 @@ static JABC_FN(JABChunkTime) {
 //  mode: 1 = color (ANSI), 2 = plain, 3 = html.
 static JABC_FN(JABChunkRender) {
   if (argc < 5) JABC_THROW("hunk._render(buf, recOff, out, outOff, mode)");
-  u8s buf = {};
+  u8* buf[4] = {};
   hunk hk = {};
   if (!JABChunkAt(&hk, buf, ctx, args[0], args[1], exception))
     JABC_THROW("hunk.render: bad record");
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  size_t oo = (size_t)JSValueToNumber(ctx, args[3], exception);
-  int mode = (int)JSValueToNumber(ctx, args[4], exception);
-  u8s into = {out[0] + oo, out[1]};
-  u8* base = into[0];
+  u8* outb[4] = {};
+  if (!JABCIdleOf(outb, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[3], exception)) JABC_UNDEF;  //  DATA = [0,oo)
+  u32 mode = 0;
+  if (!JABCu32Of(&mode, ctx, args[4], exception)) JABC_UNDEF;
+  size_t before = u8bDataLen(outb);
   ok64 o;
-  if (mode == 3) o = HUNKu8sFeedHtml(into, &hk);
-  else if (mode == 1) o = HUNKu8sFeedColor(into, &hk);
-  else o = HUNKu8sFeedText(into, &hk);
+  if (mode == 3) o = HUNKu8sFeedHtml(u8bIdle(outb), &hk);
+  else if (mode == 1) o = HUNKu8sFeedColor(u8bIdle(outb), &hk);
+  else o = HUNKu8sFeedText(u8bIdle(outb), &hk);
   if (o != OK) JABC_THROW("hunk.render: out full");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - base));
+  return JSValueMakeNumber(ctx, (double)(u8bDataLen(outb) - before));
 }
 
 static inline void JABCHunkInstall(JSObjectRef o) {

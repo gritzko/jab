@@ -5,8 +5,9 @@
 //  index's job (a wh128 layer above), so this binding never takes a sha.
 //
 //  GIT-007: PURE marshalling over the dog/git pack-log core.  Every entry
-//  resolves a typed array to a u8s (JABCBytesOf) and calls ONE dog/git PACK
-//  function — zero delta/encode/inflate decisions live here.  The writer is
+//  resolves a typed array to a u8b (JABCDataOf/JABCIdleOf, PTR-010) and calls
+//  ONE dog/git PACK function — no delta/encode/inflate decisions here.  The
+//  writer is
 //  PACKu8sFeedObj (GIT-002), the reader PACKResolveOfs (GIT-004); both take
 //  caller-provided scratch, so this binding never malloc()s.
 //
@@ -54,23 +55,22 @@ static inline void JABCSet(JSContextRef ctx, JSObjectRef o, const char* name,
 //  _pack_header(buf, off, count) -> off+12
 static JABC_FN(JABCpackHeader) {
   if (argc < 3) JABC_THROW("pack._header(buf, off, count)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  u32 count = (u32)JSValueToNumber(ctx, args[2], exception);
-  u8s into = {c[0] + off, c[1]};
-  if (PACKu8sFeedHdr(into, count) != OK) JABC_THROW("pack: header");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - c[0]));
+  u8* c[4] = {};
+  if (!JABCIdleOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCBufFed(c, ctx, args[1], exception)) JABC_UNDEF;   //  DATA = [0,off)
+  u32 count = 0;
+  if (!JABCu32Of(&count, ctx, args[2], exception)) JABC_UNDEF;
+  if (PACKu8sFeedHdr(u8bIdle(c), count) != OK) JABC_THROW("pack: header");
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(c));
 }
 
 //  _pack_count(buf) -> object count (from the 12-byte header)
 static JABC_FN(JABCpackCount) {
   if (argc < 1) JABC_THROW("pack._count(buf)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  u8cs from = {c[0], c[1]};
+  u8* c[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
   pack_hdr hdr = {};
-  if (PACKDrainHdr(from, &hdr) != OK) JABC_THROW("pack: bad header");
+  if (PACKDrainHdr(u8bDataC(c), &hdr) != OK) JABC_THROW("pack: bad header");
   return JSValueMakeNumber(ctx, (double)hdr.count);
 }
 
@@ -80,32 +80,39 @@ static JABC_FN(JABCpackCount) {
 //  checks every header/varint/deflate return (no ignored-return double-header).
 static JABC_FN(JABCpackFeed) {
   if (argc < 4) JABC_THROW("pack._feed(buf, off, type, content, base, baseOff, delta)");
-  u8s c = {}, content = {}, base = {}, delta = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  u8 type = (u8)JSValueToNumber(ctx, args[2], exception);
-  if (!JABCBytesOf(content, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
+  u8* logb[4] = {};
+  u8* contentb[4] = {};
+  u8* baseb[4] = {};
+  u8* deltab[4] = {};
+  if (!JABCIdleOf(logb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCBufFed(logb, ctx, args[1], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  size_t off = u8bDataLen(logb);
+  u8 type = 0;
+  if (!JABCu8Of(&type, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCDataOf(contentb, ctx, args[3], exception)) JABC_UNDEF;
   //  base (resolved bytes) + baseOff are optional: absent/empty → raw record.
-  if (argc > 4) JABCBytesOf(base, ctx, args[4], exception);
-  double bod = argc > 5 ? JSValueToNumber(ctx, args[5], exception) : -1;
-  if (argc > 6) JABCBytesOf(delta, ctx, args[6], exception);
-
-  u8* b[4] = {c[0], c[0] + off, c[0] + off, c[1]};  //  log: DATA ends at off
-  u8csc bc = {base[0], base[1]};
-  u8csc cc = {content[0], content[1]};
-  u8* d[4] = {delta[0], delta[0], delta[0], delta[1]};  //  delta encode scratch
-  u64 base_off = bod >= 0 ? (u64)bod : (u64)off;  //  off when no base (no delta)
-  if (PACKu8sFeedObj((u8bp)b, type, cc, bc, (u64)off, base_off, (u8bp)d, NULL) != OK)
+  if (argc > 4 && !JABCDataOf(baseb, ctx, args[4], exception)) JABC_UNDEF;
+  i64 bod = -1;                          //  -1 = no base (the shim's sentinel)
+  if (argc > 5 && !JABCi64Of(&bod, ctx, args[5], exception)) JABC_UNDEF;
+  u64 base_off = bod >= 0 ? (u64)bod : (u64)off;
+  if (argc > 6 && !JABCIdleOf(deltab, ctx, args[6], exception)) JABC_UNDEF;
+  if (PACKu8sFeedObj((u8bp)logb, type, u8bDataC(contentb), u8bDataC(baseb),
+                     (u64)off, base_off, (u8bp)deltab, NULL) != OK)
     JABC_THROW("pack: feed (full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(b[2] - c[0]));
+  return JSValueMakeNumber(ctx, (double)u8bBusyLen(logb));
 }
 
 //  Drain the object header at recOff (advancing nothing the caller sees).
-static b8 JABCpackAt(pack_obj* obj, u8s c, JSContextRef ctx, JSValueRef bufv,
-                     JSValueRef offv, JSValueRef* ex) {
-  if (!JABCBytesOf(c, ctx, bufv, ex)) return NO;
-  size_t rec = (size_t)JSValueToNumber(ctx, offv, ex);
-  u8cs from = {c[0] + rec, c[1]};
+//  PTR-010: `rec` is a JS number — git.pack leaves -1 in `_rec` after a
+//  failed seek, and the old `(size_t)` cast + `c[0] + rec` read one byte
+//  BELOW the mapping (SIGSEGV once the page under it was unmapped).  The
+//  offset is now gated and moved by u8bUsed; the consumed prefix is PAST,
+//  so `c` still spans the whole log for the callers that need it.
+static b8 JABCpackAt(pack_obj* obj, u8* c[4], JSContextRef ctx,
+                     JSValueRef bufv, JSValueRef offv, JSValueRef* ex) {
+  if (!JABCDataOf(c, ctx, bufv, ex)) return NO;
+  if (!JABCBufAt(c, ctx, offv, ex)) return NO;
+  a_dup(u8 const, from, u8bDataC(c));      //  drain a copy: keep DATA put
   return PACKDrainObjHdr(from, obj) == OK;
 }
 
@@ -114,42 +121,45 @@ static b8 JABCpackAt(pack_obj* obj, u8s c, JSContextRef ctx, JSValueRef bufv,
 //  resolver where the record ends — no JS-side re-inflate-to-measure.
 static JABC_FN(JABCpackNext) {
   if (argc < 3) JABC_THROW("pack._next(buf, off, dataLen)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  size_t dl = (size_t)JSValueToNumber(ctx, args[2], exception);
+  u8* c[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  size_t off = 0, dl = 0;
+  if (!JABCOffOf(&off, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCOffOf(&dl, u8bDataC(c), ctx, args[2], exception)) JABC_UNDEF;
   if (off >= dl) return JSValueMakeNumber(ctx, -1);
-  u8cs pack = {c[0], c[0] + dl};
+  u8cs pack = {};                            //  [0, dl) — abc bounds-checks
+  if (dl > 0xffffffffUL || u8csSub(u8bDataC(c), pack, 0, (u32)dl) != OK)
+    JABC_THROW("pack: the data length is out of range");
   u64 end = 0;
   if (PACKRecordEnd(pack, (u64)off, &end) != OK) return JSValueMakeNumber(ctx, -1);
   return JSValueMakeNumber(ctx, (double)(size_t)end);
 }
 
 static JABC_FN(JABCpackType) {
-  u8s c = {};
+  u8* c[4] = {};
   pack_obj o = {};
   if (argc < 2 || !JABCpackAt(&o, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
   return JSValueMakeNumber(ctx, (double)o.type);
 }
 static JABC_FN(JABCpackSize) {
-  u8s c = {};
+  u8* c[4] = {};
   pack_obj o = {};
   if (argc < 2 || !JABCpackAt(&o, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
   return JSValueMakeNumber(ctx, (double)o.size);
 }
 static JABC_FN(JABCpackBaseOff) {
-  u8s c = {};
+  u8* c[4] = {};
   pack_obj o = {};
   if (argc < 2 || !JABCpackAt(&o, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
   if (o.type != PACK_OBJ_OFS_DELTA) return JSValueMakeNumber(ctx, -1);
-  size_t rec = (size_t)JSValueToNumber(ctx, args[1], exception);
-  return JSValueMakeNumber(ctx, (double)(rec - o.ofs_delta));
+  //  the record's own offset is what JABCpackAt consumed into PAST
+  return JSValueMakeNumber(ctx, (double)(u8bPastLen(c) - o.ofs_delta));
 }
 static JABC_FN(JABCpackRef) {
-  u8s c = {};
+  u8* c[4] = {};
   pack_obj o = {};
   if (argc < 2 || !JABCpackAt(&o, c, ctx, args[0], args[1], exception))
     return JSValueMakeUndefined(ctx);
@@ -161,19 +171,18 @@ static JABC_FN(JABCpackRef) {
 //  Raw single-record read: drain the header, inflate the one zlib stream.
 static JABC_FN(JABCpackInflate) {
   if (argc < 4) JABC_THROW("pack._inflate(buf, recOff, out, outOff)");
-  u8s c = {};
+  u8* c[4] = {};
   pack_obj o = {};
   if (!JABCpackAt(&o, c, ctx, args[0], args[1], exception))
     JABC_THROW("pack: bad record");
-  size_t rec = (size_t)JSValueToNumber(ctx, args[1], exception);
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  size_t oo = (size_t)JSValueToNumber(ctx, args[3], exception);
-  u8cs from = {c[0] + rec, c[1]};
+  u8* out[4] = {};
+  if (!JABCIdleOf(out, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCBufFed(out, ctx, args[3], exception)) JABC_UNDEF;
+  a_dup(u8 const, from, u8bDataC(c));    //  the record, header still on
   pack_obj tmp = {};
   PACKDrainObjHdr(from, &tmp);
-  u8s into = {out[0] + oo, out[1]};
-  if (PACKInflate(from, into, tmp.size) != OK) JABC_THROW("pack: inflate (out full?)");
+  if (PACKInflate(from, u8bIdle(out), tmp.size) != OK)
+    JABC_THROW("pack: inflate (out full?)");
   return JSValueMakeNumber(ctx, (double)(size_t)tmp.size);
 }
 
@@ -183,17 +192,21 @@ static JABC_FN(JABCpackInflate) {
 //  Uint8Array (the chase aliasing stays inside the scratch, never leaks).
 static JABC_FN(JABCpackResolve) {
   if (argc < 4) JABC_THROW("pack._resolve(buf, recOff, base, delta)");
-  u8s c = {}, base = {}, delta = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t rec = (size_t)JSValueToNumber(ctx, args[1], exception);
-  if (!JABCBytesOf(base, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(delta, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  u8cs pack = {c[0], c[1]};
+  u8* c[4] = {};
+  u8* base[4] = {};
+  u8* delta[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  size_t rec = 0;                        //  a position, not a boundary: an
+  if (!JABCOffOf(&rec, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(base, ctx, args[2], exception)) JABC_UNDEF;   //  OFS-delta
+  if (!JABCIdleOf(delta, ctx, args[3], exception)) JABC_UNDEF;  //  reads back
+  a_dup(u8 const, pack, u8bDataC(c));
   u8cs out = {};
   u8 type = 0;
   //  JS-055: surface NOROOM distinctly (the wrapper grows scratch); REF_DELTA
   //  stays its own loud fail so detection isn't lost to a grow loop.
-  ok64 r = PACKResolveOfs(pack, (u64)rec, base, delta, out, &type);
+  ok64 r = PACKResolveOfs(pack, (u64)rec, u8bIdle(base), u8bIdle(delta), out,
+                          &type);
   if (r == NOROOM) JABC_THROW("pack: resolve NOROOM");
   if (r == PACKREF) JABC_THROW("pack: resolve ref-delta");
   if (r != OK) JABC_THROW("pack: resolve");
@@ -203,34 +216,35 @@ static JABC_FN(JABCpackResolve) {
 //  _delt_apply(base, delta, out, outOff) -> reconstructed bytes
 static JABC_FN(JABCdeltApply) {
   if (argc < 4) JABC_THROW("delt._apply(base, delta, out, outOff)");
-  u8s base = {}, delta = {}, out = {};
-  if (!JABCBytesOf(base, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(delta, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  size_t oo = (size_t)JSValueToNumber(ctx, args[3], exception);
-  u8cs dl = {delta[0], delta[1]};
-  u8cs bl = {base[0], base[1]};
-  u8* op = out[0] + oo;
-  u8* og[3] = {op, op, out[1]};
-  if (DELTApply(dl, bl, og) != OK) JABC_THROW("delt: apply (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(og[1] - op));
+  u8* baseb[4] = {};
+  u8* deltab[4] = {};
+  u8* outb[4] = {};
+  if (!JABCDataOf(baseb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCDataOf(deltab, ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[3], exception)) JABC_UNDEF;
+  size_t before = u8bDataLen(outb);
+  if (DELTApply(u8bDataC(deltab), u8bDataC(baseb), u8bDataIdle(outb)) != OK)
+    JABC_THROW("delt: apply (out full?)");
+  return JSValueMakeNumber(ctx, (double)(u8bDataLen(outb) - before));
 }
 
 //  JS-036: _delt_encode(base, target, out, outOff) -> n delta bytes appended
 //  at out[outOff], or -1 on DELTFAIL (delta not smaller than target -> raw).
 static JABC_FN(JABCdeltEncode) {
   if (argc < 4) JABC_THROW("delt._encode(base, target, out, outOff)");
-  u8s base = {}, target = {}, out = {};
-  if (!JABCBytesOf(base, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(target, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  size_t oo = (size_t)JSValueToNumber(ctx, args[3], exception);
-  u8* o[4] = {out[0], out[0] + oo, out[0] + oo, out[1]};  //  DATA ends at outOff
-  u8csc b = {base[0], base[1]}, t = {target[0], target[1]};
-  ok64 r = DELTEncode(b, t, (u8bp)o);
+  u8* baseb[4] = {};
+  u8* targetb[4] = {};
+  u8* outb[4] = {};
+  if (!JABCDataOf(baseb, ctx, args[0], exception)) JABC_UNDEF;
+  if (!JABCDataOf(targetb, ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[3], exception)) JABC_UNDEF;  //  DATA = [0,oo)
+  size_t before = u8bDataLen(outb);
+  ok64 r = DELTEncode(u8bDataC(baseb), u8bDataC(targetb), (u8bp)outb);
   if (r == DELTFAIL) return JSValueMakeNumber(ctx, -1);
   if (r != OK) JABC_THROW("delt: encode");
-  return JSValueMakeNumber(ctx, (double)(size_t)(o[2] - (out[0] + oo)));
+  return JSValueMakeNumber(ctx, (double)(u8bDataLen(outb) - before));
 }
 
 //  _pack_scan(buf, dataLen, out, base, delta) -> entry count
@@ -247,25 +261,33 @@ static JABC_FN(JABCdeltEncode) {
 //  DISTINCT throw so the wrapper grows scratch instead of guessing ref-delta.
 static JABC_FN(JABCpackScan) {
   if (argc < 5) JABC_THROW("pack._scan(buf, dataLen, out, base, delta)");
-  u8s c = {}, out = {}, base = {}, delta = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t dl = (size_t)JSValueToNumber(ctx, args[1], exception);
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(base, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(delta, ctx, args[4], exception)) return JSValueMakeUndefined(ctx);
-  u8cs pack = {c[0], c[0] + dl};
+  u8* c[4] = {};
+  u8* outb[4] = {};
+  u8* baseb[4] = {};
+  u8* deltab[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  size_t dl = 0;
+  if (!JABCOffOf(&dl, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(baseb, ctx, args[3], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(deltab, ctx, args[4], exception)) JABC_UNDEF;
+  u8cs pack = {};                            //  [0, dl) — abc bounds-checks
+  if (dl > 0xffffffffUL || u8csSub(u8bDataC(c), pack, 0, (u32)dl) != OK)
+    JABC_THROW("pack.scan: the data length is out of range");
   pack_hdr hdr = {};
-  u8cs hv = {pack[0], pack[1]};   //  PACKDrainHdr CONSUMES — validate on a copy
+  a_dup(u8 const, hv, pack);      //  PACKDrainHdr CONSUMES — validate on a copy
   if (PACKDrainHdr(hv, &hdr) != OK) JABC_THROW("pack.scan: bad header");
+  u8* const* out = u8bIdle(outb);
   if (((uintptr_t)out[0] & 7u) != 0)
     JABC_THROW("pack.scan: out not 8-byte aligned (reset the Buf)");
   size_t need = (size_t)hdr.count * sizeof(wh128);
-  if ((size_t)$len(out) < need) JABC_THROW("pack.scan: out too small");
+  if (u8bIdleLen(outb) < need) JABC_THROW("pack.scan: out too small");
   //  Bwh128 over the caller's region: emit lands at [out[0], out[1]).
   wh128* wb = (wh128*)out[0];
-  wh128* wcap = (wh128*)(out[0] + (((size_t)$len(out)) / sizeof(wh128)) * sizeof(wh128));
+  wh128* wcap = wb + u8bIdleLen(outb) / sizeof(wh128);
   wh128* wbuf[4] = {wb, wb, wb, wcap};
-  ok64 r = PIDXScan(pack, 0, wbuf, base, delta);  //  PACK-001: 0 = whole pack
+  //  PACK-001: 0 = whole pack
+  ok64 r = PIDXScan(pack, 0, wbuf, u8bIdle(baseb), u8bIdle(deltab));
   if (r == NOROOM) JABC_THROW("pack.scan: NOROOM");
   if (r == PACKREF) JABC_THROW("pack.scan: ref-delta");
   if (r != OK) JABC_THROW("pack.scan: scan (out full? corrupt?)");
@@ -279,19 +301,21 @@ static JABC_FN(JABCpackScan) {
 //  PIDXFeedEmit; out is the caller's wh128 entry sink (a Buf's IDLE).
 static JABC_FN(JABCpackFeedEmit) {
   if (argc < 5) JABC_THROW("pack._feed_emit(type, content, offset, out, outOff)");
-  u8 type = (u8)JSValueToNumber(ctx, args[0], exception);
-  u8s content = {}, out = {};
-  if (!JABCBytesOf(content, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
-  u64 offset = (u64)JSValueToNumber(ctx, args[2], exception);
-  if (!JABCBytesOf(out, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  size_t oo = (size_t)JSValueToNumber(ctx, args[4], exception);
-  u8* slot = out[0] + oo;
+  u8 type = 0;
+  if (!JABCu8Of(&type, ctx, args[0], exception)) JABC_UNDEF;
+  u8* contentb[4] = {};
+  u8* outb[4] = {};
+  if (!JABCDataOf(contentb, ctx, args[1], exception)) JABC_UNDEF;
+  u64 offset = 0;
+  if (!JABCu64Of(&offset, ctx, args[2], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(outb, ctx, args[3], exception)) JABC_UNDEF;
+  if (!JABCBufFed(outb, ctx, args[4], exception)) JABC_UNDEF;  //  slot at outOff
+  u8* slot = u8bIdle(outb)[0];
   if (((uintptr_t)slot & 7u) != 0)
     JABC_THROW("pack.feedEmit: out slot not 8-byte aligned");
-  if ((size_t)(out[1] - slot) < sizeof(wh128)) JABC_THROW("pack.feedEmit: out full");
+  if (u8bIdleLen(outb) < sizeof(wh128)) JABC_THROW("pack.feedEmit: out full");
   wh128* wbuf[4] = {(wh128*)slot, (wh128*)slot, (wh128*)slot, (wh128*)slot + 1};
-  u8csc cc = {content[0], content[1]};
-  if (PIDXFeedEmit(wbuf, type, cc, offset) != OK)
+  if (PIDXFeedEmit(wbuf, type, u8bDataC(contentb), offset) != OK)
     JABC_THROW("pack.feedEmit: emit");
   return JSValueMakeNumber(ctx, (double)sizeof(wh128));
 }
@@ -307,11 +331,13 @@ static JABC_FN(JABCpackFeedEmit) {
 //  "<mode> <name>" head so `name` is the bare name span — no JS framing.
 static JABC_FN(JABCgitTreeNext) {
   if (argc < 2) JABC_THROW("git._tree_next(bytes, off)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[1], exception);
-  if (off >= (size_t)$len(c)) return JSValueMakeNull(ctx);
-  u8cs obj = {c[0] + off, c[1]};
+  u8* c[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
+  size_t off = 0;
+  if (!JABCOffOf(&off, u8bDataC(c), ctx, args[1], exception)) JABC_UNDEF;
+  if (off >= u8bDataLen(c)) return JSValueMakeNull(ctx);
+  if (!JABCBufAt(c, ctx, args[1], exception)) JABC_UNDEF;
+  a_dup(u8 const, obj, u8bDataC(c));   //  drained below; DATA stays put
   u8cs file = {}, sha1 = {};
   u32 mode = 0;
   ok64 r = GITu8sDrainTree(obj, file, sha1, &mode);
@@ -322,10 +348,15 @@ static JABC_FN(JABCgitTreeNext) {
   GITu8sFileSplit(file, NULL, name);
   JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
   JABCSet(ctx, o, "mode", JSValueMakeNumber(ctx, (double)mode));
-  JABCSet(ctx, o, "nameStart", JSValueMakeNumber(ctx, (double)(size_t)(name[0] - c[0])));
-  JABCSet(ctx, o, "nameEnd", JSValueMakeNumber(ctx, (double)(size_t)(name[1] - c[0])));
+  //  spans as positions in the SOURCE bytes: PAST is what we skipped to `off`
+  size_t base = u8bPastLen(c);
+  JABCSet(ctx, o, "nameStart",
+          JSValueMakeNumber(ctx, (double)(base + (size_t)(name[0] - u8bDataC(c)[0]))));
+  JABCSet(ctx, o, "nameEnd",
+          JSValueMakeNumber(ctx, (double)(base + (size_t)(name[1] - u8bDataC(c)[0]))));
   JABCSet(ctx, o, "sha", JABCHexOf(ctx, sha1[0], GIT_SHA1_LEN));
-  JABCSet(ctx, o, "nextOff", JSValueMakeNumber(ctx, (double)(size_t)(obj[0] - c[0])));
+  JABCSet(ctx, o, "nextOff",
+          JSValueMakeNumber(ctx, (double)(base + (size_t)(obj[0] - u8bDataC(c)[0]))));
   return o;
 }
 
@@ -338,13 +369,13 @@ static JABC_FN(JABCgitTreeNext) {
 //  manual git framing in JS — every split is a dog/git drain.
 static JABC_FN(JABCgitParseCommit) {
   if (argc < 1) JABC_THROW("git._parse_commit(bytes)");
-  u8s c = {};
-  if (!JABCBytesOf(c, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* c[4] = {};
+  if (!JABCDataOf(c, ctx, args[0], exception)) JABC_UNDEF;
 
   JSObjectRef o = JSObjectMake(ctx, NULL, NULL);
 
   //  tree sha (binary -> hex); empty string when absent/malformed.
-  u8cs commit = {c[0], c[1]};
+  a_dup(u8 const, commit, u8bDataC(c));
   u8 tree_sha[GIT_SHA1_LEN] = {};
   if (GITu8sCommitTree(commit, tree_sha) == OK)
     JABCSet(ctx, o, "tree", JABCHexOf(ctx, tree_sha, GIT_SHA1_LEN));
@@ -360,7 +391,7 @@ static JABC_FN(JABCgitParseCommit) {
   JSValueRef body = JSOfCString("");  // JS-109: releases its ref
   unsigned np = 0, nf = 0;
 
-  u8cs scan = {c[0], c[1]};
+  a_dup(u8 const, scan, u8bDataC(c));
   u8cs field = {}, value = {};
   while (GITu8sDrainCommit(scan, field, value) == OK) {
     if (field[0] == field[1]) {  //  blank line -> body is the rest
@@ -406,12 +437,17 @@ static inline JSValueRef JABCGet(JSContextRef ctx, JSObjectRef o,
   return v;
 }
 
-static inline double JABCNumOf(JSContextRef ctx, JSObjectRef o,
-                               const char* name, double dflt) {
+//  PTR-010: an absent option falls back to `dflt`; a present one goes
+//  through the gate, so a garbage opts.cap can't become a wild size.
+static inline u64 JABCNumOf(JSContextRef ctx, JSObjectRef o, const char* name,
+                            u64 dflt) {
   if (o == NULL) return dflt;
-  JSValueRef v = JABCGet(ctx, o, name);
+  JSValueRef v = JABCGetProp(ctx, o, name);
   if (JSValueIsUndefined(ctx, v) || JSValueIsNull(ctx, v)) return dflt;
-  return JSValueToNumber(ctx, v, NULL);
+  u64 n = 0;
+  JSValueRef ex = NULL;
+  if (!JABCu64Of(&n, ctx, v, &ex)) return dflt;
+  return n;
 }
 
 //  The stats record REPACKRun fills, as a plain JS object.
@@ -478,19 +514,14 @@ static inline const char* JABCPackWords(ok64 o) {
 //    opts.onStep  progress handler, called with the live stats
 static JABC_FN(JABCpackRepack) {
   if (argc < 3) JABC_THROW("git.pack(fd, buf, shard, opts) -> stats");
-  int fd = (int)JSValueToNumber(ctx, args[0], exception);
-  if (fd < 0) JABC_THROW("git.pack: bad fd");
+  i64 fdv = -1;
+  if (!JABCi64Of(&fdv, ctx, args[0], exception)) JABC_UNDEF;
+  int fd = (int)fdv;
+  if (fdv < 0 || fdv != (i64)fd) JABC_THROW("git.pack: bad fd");
   if (!JSValueIsObject(ctx, args[1])) JABC_THROW("git.pack: buf must be a Buf");
   JSObjectRef bo = JSValueToObject(ctx, args[1], exception);
-  u8s bytes = {};
-  if (!JABCBytesOf(bytes, ctx, JABCGet(ctx, bo, "bytes"), exception))
-    return JSValueMakeUndefined(ctx);
-  size_t bcap = (size_t)$len(bytes);
-  size_t bdata = (size_t)JABCNumOf(ctx, bo, "_data", 0);
-  size_t bidle = (size_t)JABCNumOf(ctx, bo, "_idle", 0);
-  if (bdata > bidle || bidle > bcap)
-    JABC_THROW("git.pack: the buffer's cursor is out of range");
-  u8b buf = {bytes[0], bytes[0] + bdata, bytes[0] + bidle, bytes[0] + bcap};
+  u8* buf[4] = {};                       //  cursors gated + checked in arg.cpp
+  if (!JABCBufOf(buf, ctx, args[1], exception)) JABC_UNDEF;
 
   a_pad(u8, shard, FILE_PATH_MAX_LEN);
   if (JABCPath(shard, ctx, args[2], exception) != OK) {
@@ -500,16 +531,16 @@ static JABC_FN(JABCpackRepack) {
 
   JSObjectRef oo = (argc > 3 && JSValueIsObject(ctx, args[3]))
                        ? JSValueToObject(ctx, args[3], NULL) : NULL;
-  u8s ix = {};
+  u8* ixb[4] = {};
   if (oo == NULL ||
-      !JABCBytesOf(ix, ctx, JABCGet(ctx, oo, "index"), exception)) {
+      !JABCIdleOf(ixb, ctx, JABCGetProp(ctx, oo, "index"), exception)) {
     if (*exception) return JSValueMakeUndefined(ctx);
     JABC_THROW("git.pack: opts.index (a wh128 region) is required");
   }
-  if (((uintptr_t)ix[0] & 7u) != 0)
+  wh128* ib = (wh128*)u8bIdle(ixb)[0];
+  if (((uintptr_t)ib & 7u) != 0)
     JABC_THROW("git.pack: opts.index is not 8-byte aligned");
-  wh128* ib = (wh128*)ix[0];
-  wh128* icap = ib + (size_t)$len(ix) / sizeof(wh128);
+  wh128* icap = ib + u8bIdleLen(ixb) / sizeof(wh128);
   wh128* ibuf[4] = {ib, ib, ib, icap};
 
   jabc_repack_watch w = {ctx, NULL, NULL};
@@ -518,9 +549,9 @@ static JABC_FN(JABCpackRepack) {
       JSObjectIsFunction(ctx, JSValueToObject(ctx, cb, NULL)))
     w.fn = JSValueToObject(ctx, cb, NULL);
   repack_conf conf = {};
-  conf.cap = (u64)JABCNumOf(ctx, oo, "cap", 0);
+  conf.cap = JABCNumOf(ctx, oo, "cap", 0);
   conf.log0 = (u32)JABCNumOf(ctx, oo, "log0", 0);
-  conf.every = (u64)JABCNumOf(ctx, oo, "every", 0);
+  conf.every = JABCNumOf(ctx, oo, "every", 0);
   if (w.fn != NULL) {
     conf.watch = JABCPackWatch;
     conf.user = &w;
@@ -531,8 +562,7 @@ static JABC_FN(JABCpackRepack) {
   ok64 r = REPACKRun(fd, buf, $path(shard), &conf, ibuf, &st);
   //  Hand the consumed/filled boundaries back to the caller's Buf either
   //  way — a failed run still ate what it ate.
-  JABCSet(ctx, bo, "_data", JSValueMakeNumber(ctx, (double)(buf[1] - bytes[0])));
-  JABCSet(ctx, bo, "_idle", JSValueMakeNumber(ctx, (double)(buf[2] - bytes[0])));
+  JABCBufBack(ctx, bo, buf);
   if (w.exc != NULL) {           //  the progress handler threw: re-raise it
     *exception = w.exc;
     JSValueUnprotect(ctx, w.exc);

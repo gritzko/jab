@@ -13,8 +13,9 @@
 static JABC_FN(JABCutf8EncodeInto) {
   if (argc < 2 || !JSValueIsString(ctx, args[0]))
     JABC_THROW("utf8.encodeInto(string, Uint8Array) -> n");
-  u8s dst = {};
-  if (!JABCBytesOf(dst, ctx, args[1], exception)) return JSValueMakeUndefined(ctx);
+  u8* dstb[4] = {};
+  if (!JABCIdleOf(dstb, ctx, args[1], exception)) JABC_UNDEF;
+  u8* const* dst = u8bIdle(dstb);
 
   JSStringRef str = JSValueToStringCopy(ctx, args[0], exception);
   if (*exception || str == NULL) return JSValueMakeUndefined(ctx);
@@ -50,14 +51,13 @@ static JABC_FN(JABCutf8EncodeInto) {
 //  NUL-terminated UTF-8 constructor).
 static JABC_FN(JABCutf8Decode) {
   if (argc < 1) JABC_THROW("utf8.Decode(Uint8Array) -> string");
-  u8s src = {};
-  if (!JABCBytesOf(src, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* srcb[4] = {};
+  if (!JABCDataOf(srcb, ctx, args[0], exception)) JABC_UNDEF;
 
-  utf8cs scan = {(utf8c*)src[0], (utf8c*)src[1]};
+  utf8cs scan = {(utf8c*)u8bDataC(srcb)[0], (utf8c*)u8bDataC(srcb)[1]};
   if (utf8sValid(scan) != OK) JABC_THROW("utf8.Decode(): malformed UTF-8");
 
-  u8cs s = {src[0], src[1]};
-  return JABCStrOfSlice(ctx, s, exception);
+  return JABCStrOfSlice(ctx, u8bDataC(srcb), exception);
 }
 
 //  JS-108: THE shared slice->string helper (see JABC.hpp).  One copy, into
@@ -101,33 +101,6 @@ JSValueRef JSOfCString(const char* str) {
   JSValueRef v = JSValueMakeString(JABC_CONTEXT, tmp);
   JSStringRelease(tmp);
   return v;
-}
-
-//  Shared boundary helper: a typed array's backing range as a u8 slice.
-b8 JABCBytesOf(u8s out, JSContextRef ctx, JSValueRef arg, JSValueRef* exception) {
-  if (JSValueGetTypedArrayType(ctx, arg, NULL) == kJSTypedArrayTypeNone) {
-    *exception = JSOfCString("expected a typed array");
-    return NO;
-  }
-  JSObjectRef obj = JSValueToObject(ctx, arg, exception);
-  if (*exception) return NO;
-  u8* base = (u8*)JSObjectGetTypedArrayBytesPtr(ctx, obj, exception);
-  if (*exception) return NO;
-  size_t len = JSObjectGetTypedArrayByteLength(ctx, obj, exception);
-  if (*exception) return NO;
-  //  A detached/neutered ArrayBuffer yields a NULL bytes ptr (len may be 0).
-  if (base == NULL && len != 0) {
-    *exception = JSOfCString("detached buffer");
-    return NO;
-  }
-  //  BytesPtr is the ArrayBuffer base, NOT the view's start: a subarray
-  //  (byteOffset > 0) shares the buffer, so add the offset or every
-  //  offset view reads/writes the wrong bytes.
-  size_t off = JSObjectGetTypedArrayByteOffset(ctx, obj, exception);
-  if (*exception) return NO;
-  out[0] = base + off;
-  out[1] = base + off + len;
-  return YES;
 }
 
 ok64 JABCutf8Install() {

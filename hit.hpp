@@ -96,7 +96,8 @@ CSSWAP(sha1) CSSWAP(sha256)
     size_t cap;                                                               \
     if (!JABCLaneArr(&base, &cap, ctx, args[0], sizeof(L), exception))        \
       return JSValueMakeUndefined(ctx);                                       \
-    size_t n = (size_t)JSValueToNumber(ctx, args[1], exception);              \
+    u64 n = 0;                                                                \
+    if (!JABCu64Of(&n, ctx, args[1], exception)) JABC_UNDEF;                  \
     if (n > cap) n = cap;                                                     \
     L* bb = (L*)base;                                                         \
     L##s sl = {bb, bb + n};                                                   \
@@ -114,8 +115,9 @@ CSSWAP(sha1) CSSWAP(sha256)
       JABC_THROW("merge/intersect([runs])");                                  \
     JSObjectRef arr = (JSObjectRef)args[0];                                   \
     JSStringRef lk = JSStringCreateWithUTF8CString("length");                 \
-    size_t N = (size_t)JSValueToNumber(                                       \
-        ctx, JSObjectGetProperty(ctx, arr, lk, exception), exception);        \
+    u64 N = 0;                                                                \
+    if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
+                   exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
     if (N > 64) JABC_THROW("merge: too many runs (max 64)");                  \
     L##cs ent[64];                                                            \
@@ -123,9 +125,9 @@ CSSWAP(sha1) CSSWAP(sha256)
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \
           JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);       \
-      u8s b = {};                                                             \
-      if (!JABCBytesOf(b, ctx, el, exception))                                \
-        return JSValueMakeUndefined(ctx);                                     \
+      u8* bb[4] = {};                                                         \
+      if (!JABCDataOf(bb, ctx, el, exception)) JABC_UNDEF;                    \
+      u8 const* const* b = u8bDataC(bb);                                      \
       ent[i][0] = (const L*)b[0];                                             \
       ent[i][1] = (const L*)b[1];                                             \
       total += (size_t)$len(b) / sizeof(L);                                   \
@@ -136,9 +138,9 @@ CSSWAP(sha1) CSSWAP(sha256)
     if (argc >= 2 &&                                                          \
         JSValueGetTypedArrayType(ctx, args[1], NULL) !=                       \
             kJSTypedArrayTypeNone) {                                          \
-      u8s d = {};                                                             \
-      if (!JABCBytesOf(d, ctx, args[1], exception))                           \
-        return JSValueMakeUndefined(ctx);                                     \
+      u8* db4[4] = {};                                                        \
+      if (!JABCDataOf(db4, ctx, args[1], exception)) JABC_UNDEF;              \
+      u8* const* d = u8bData(db4);                                            \
       if ((size_t)$len(d) < total * sizeof(L)) JABC_THROW("merge: out too small");\
       /* JAB-009: ABC-015 drains take a BOUNDED slice (head advances past    \
          the output), not a bare cursor */                                    \

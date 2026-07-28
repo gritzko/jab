@@ -10,7 +10,7 @@
 //  here; no u64 ever crosses the boundary as a JS number/BigInt.  Small values
 //  that fit a double (commit INDEX, tag, counts) stay plain numbers.
 //
-//  hunk.hpp must precede this header (shared JABCBytesOf / JABCArgU8 / JABCSubU8).
+//  hunk.hpp must precede this header (shared JABCArgU8 / JABCSubU8).
 #include "cont.hpp"
 
 extern "C" {
@@ -57,12 +57,14 @@ static inline JSValueRef JABCweaveHashlet(JSContextRef ctx, u64 h) {
 //  reporting the blob base.  NO on a non-array or a malformed/empty blob.
 static inline bool JABCweaveAt(weave* w, u8** base, JSContextRef ctx,
                                JSValueRef bv, JSValueRef lv, JSValueRef* ex) {
-  u8s blob = {};
-  if (!JABCBytesOf(blob, ctx, bv, ex)) return false;
-  size_t len = (size_t)JSValueToNumber(ctx, lv, ex);
-  if (len > (size_t)$len(blob)) len = (size_t)$len(blob);
-  *base = blob[0];
-  u8csc bc = {blob[0], blob[0] + len};
+  u8* blob[4] = {};
+  if (!JABCDataOf(blob, ctx, bv, ex)) return false;
+  size_t len = 0;                        //  clamped, never past the view
+  if (!JABCOffOf(&len, u8bDataC(blob), ctx, lv, ex)) return false;
+  *base = u8bData(blob)[0];
+  u8cs bc = {};
+  if (len > 0xffffffffUL || u8csSub(u8bDataC(blob), bc, 0, (u32)len) != OK)
+    return false;
   return WEAVEParse(w, bc) == OK;
 }
 
@@ -123,10 +125,10 @@ static JABC_FN(JABCweaveStep) {
   u8* base = NULL;
   if (!JABCweaveAt(&w, &base, ctx, args[0], args[1], exception))
     return JSValueMakeBoolean(ctx, false);
-  u8s cur = {};
-  if (!JABCBytesOf(cur, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  if ((size_t)$len(cur) < 24) JABC_THROW("weave._step: cursor needs 24 bytes");
-  u32* C = (u32*)cur[0];
+  u8* curb[4] = {};
+  if (!JABCDataOf(curb, ctx, args[2], exception)) JABC_UNDEF;
+  if (u8bDataLen(curb) < 24) JABC_THROW("weave._step: cursor needs 24 bytes");
+  u32* C = (u32*)u8bData(curb)[0];
   weave c = w;
   if (w.toks[0]) c.toks[0] = (tok32c*)((u8c*)w.toks[0] + C[0]);
   if (w.text[0]) c.text[0] = w.text[0] + C[1];
@@ -167,34 +169,32 @@ static JABC_FN(JABCweaveStep) {
 //  writing a fresh 'W' blob from offset 0 of `dest`.  base NULL/empty => from-blob.
 static JABC_FN(JABCweaveNext) {
   if (argc < 6) JABC_THROW("weave._next(dest, base, baseLen, newBlob, ext, hash)");
-  u8s dest = {};
-  if (!JABCBytesOf(dest, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* destb[4] = {};
+  if (!JABCIdleOf(destb, ctx, args[0], exception)) JABC_UNDEF;
   weave bw = {};
   weave* wp = NULL;
   u8* bbase = NULL;
   if (!JSValueIsNull(ctx, args[1]) && !JSValueIsUndefined(ctx, args[1])) {
     if (JABCweaveAt(&bw, &bbase, ctx, args[1], args[2], exception)) wp = &bw;
   }
-  u8s nb = {};
-  if (!JABCBytesOf(nb, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
+  u8* nbb[4] = {};
+  if (!JABCDataOf(nbb, ctx, args[3], exception)) JABC_UNDEF;
   u8 exttmp[64];
   u8s ext = {};
   if (!JABCArgU8(ext, ctx, args[4], exttmp, sizeof(exttmp), exception))
     return JSValueMakeUndefined(ctx);
   u64 commit = JABCweaveHi64(ctx, args[5], exception);
-  u8s into = {dest[0], dest[1]};
-  u8csc nbc = {nb[0], nb[1]};
   u8csc extc = {ext[0], ext[1]};
-  if (WEAVENext(into, wp, nbc, extc, commit) != OK)
+  if (WEAVENext(u8bIdle(destb), wp, u8bDataC(nbb), extc, commit) != OK)
     JABC_THROW("weave.fold: failed (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - dest[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(destb));
 }
 
 //  _weave_merge(dest, aBlob, aLen, bBlob, bLen, hash) -> blob byte length
 static JABC_FN(JABCweaveMerge) {
   if (argc < 6) JABC_THROW("weave._merge(dest, a, aLen, b, bLen, hash)");
-  u8s dest = {};
-  if (!JABCBytesOf(dest, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
+  u8* destb[4] = {};
+  if (!JABCIdleOf(destb, ctx, args[0], exception)) JABC_UNDEF;
   weave aw = {}, bw = {};
   u8 *abase = NULL, *bbase = NULL;
   if (!JABCweaveAt(&aw, &abase, ctx, args[1], args[2], exception))
@@ -202,10 +202,9 @@ static JABC_FN(JABCweaveMerge) {
   if (!JABCweaveAt(&bw, &bbase, ctx, args[3], args[4], exception))
     JABC_THROW("weave.merge: bad b");
   u64 commit = JABCweaveHi64(ctx, args[5], exception);
-  u8s into = {dest[0], dest[1]};
-  if (WEAVEMerge(into, &aw, &bw, commit) != OK)
+  if (WEAVEMerge(u8bIdle(destb), &aw, &bw, commit) != OK)
     JABC_THROW("weave.merge: failed (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(into[0] - dest[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(destb));
 }
 
 //  _weave_idhash(hash, ordinal) -> 16-char hashlet string
@@ -259,11 +258,10 @@ static JABC_FN(JABCweaveAlive) {
   u8* base = NULL;
   if (!JABCweaveAt(&w, &base, ctx, args[0], args[1], exception))
     return JSValueMakeNumber(ctx, 0);
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  u8* bb[4] = {out[0], out[0], out[0], out[1]};
+  u8* bb[4] = {};
+  if (!JABCIdleOf(bb, ctx, args[2], exception)) JABC_UNDEF;
   if (WEAVEAlive(&w, bb) != OK) JABC_THROW("weave.alive: out full");
-  return JSValueMakeNumber(ctx, (double)(size_t)(bb[2] - out[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(bb));
 }
 
 //  _weave_produce(blob, len, scopeBitmap, outIdle) -> bytes written (rev view)
@@ -273,14 +271,13 @@ static JABC_FN(JABCweaveProduce) {
   u8* base = NULL;
   if (!JABCweaveAt(&w, &base, ctx, args[0], args[1], exception))
     return JSValueMakeNumber(ctx, 0);
-  u8s sc = {};
-  if (!JABCBytesOf(sc, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  u64cs scope = {(u64c*)sc[0], (u64c*)sc[1]};
-  u8* bb[4] = {out[0], out[0], out[0], out[1]};
+  u8* scb[4] = {};
+  if (!JABCDataOf(scb, ctx, args[2], exception)) JABC_UNDEF;
+  u8* bb[4] = {};
+  if (!JABCIdleOf(bb, ctx, args[3], exception)) JABC_UNDEF;
+  u64cs scope = {(u64c*)u8bDataC(scb)[0], (u64c*)u8bDataC(scb)[1]};
   if (WEAVEProduce(&w, scope, bb) != OK) JABC_THROW("weave.produce: out full");
-  return JSValueMakeNumber(ctx, (double)(size_t)(bb[2] - out[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(bb));
 }
 
 //  _weave_emitdiff(blob, len, name, navver, from, to, hunkDest, hunkOff) -> watermark
@@ -293,19 +290,24 @@ static JABC_FN(JABCweaveEmitDiff) {
   if (!JABCweaveAt(&w, &base, ctx, args[0], args[1], exception))
     JABC_THROW("weave.emitDiff: bad weave");
   u8 ntmp[FILE_PATH_MAX_LEN], vtmp[FILE_PATH_MAX_LEN];
-  u8s name = {}, nav = {}, fb = {}, tb = {}, dest = {};
+  u8s name = {}, nav = {};
   if (!JABCArgU8(name, ctx, args[2], ntmp, sizeof(ntmp), exception)) return JSValueMakeUndefined(ctx);
   if (!JABCArgU8(nav, ctx, args[3], vtmp, sizeof(vtmp), exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(fb, ctx, args[4], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(tb, ctx, args[5], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(dest, ctx, args[6], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[7], exception);
-  u64cs from = {(u64c*)fb[0], (u64c*)fb[1]}, to = {(u64c*)tb[0], (u64c*)tb[1]};
+  u8* fbb[4] = {};
+  u8* tbb[4] = {};
+  u8* destb[4] = {};
+  if (!JABCDataOf(fbb, ctx, args[4], exception)) JABC_UNDEF;
+  if (!JABCDataOf(tbb, ctx, args[5], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(destb, ctx, args[6], exception)) JABC_UNDEF;
+  if (!JABCBufFed(destb, ctx, args[7], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  u64cs from = {(u64c*)u8bDataC(fbb)[0], (u64c*)u8bDataC(fbb)[1]};
+  u64cs to = {(u64c*)u8bDataC(tbb)[0], (u64c*)u8bDataC(tbb)[1]};
   u8cs namec = {name[0], name[1]}, navc = {nav[0], nav[1]};
-  JABCemit em = {{dest[0] + off, dest[1]}, OK};
+  JABCemit em = {{u8bIdle(destb)[0], u8bIdle(destb)[1]}, OK};
   ok64 o = WEAVEEmitDiff(&w, namec, navc, from, to, JABCweaveEmitCb, &em);
   if (o != OK || em.err != OK) JABC_THROW("weave.emitDiff: failed (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(em.into[0] - dest[0]));
+  return JSValueMakeNumber(
+      ctx, (double)(u8bDataLen(destb) + (size_t)(em.into[0] - u8bIdle(destb)[0])));
 }
 
 //  _weave_emitfull(blob, len, name, scheme, navver, from, to, hunkDest, hunkOff) -> watermark
@@ -316,20 +318,25 @@ static JABC_FN(JABCweaveEmitFull) {
   if (!JABCweaveAt(&w, &base, ctx, args[0], args[1], exception))
     JABC_THROW("weave.emitFull: bad weave");
   u8 ntmp[FILE_PATH_MAX_LEN], stmp[FILE_PATH_MAX_LEN], vtmp[FILE_PATH_MAX_LEN];
-  u8s name = {}, sch = {}, nav = {}, fb = {}, tb = {}, dest = {};
+  u8s name = {}, sch = {}, nav = {};
   if (!JABCArgU8(name, ctx, args[2], ntmp, sizeof(ntmp), exception)) return JSValueMakeUndefined(ctx);
   if (!JABCArgU8(sch, ctx, args[3], stmp, sizeof(stmp), exception)) return JSValueMakeUndefined(ctx);
   if (!JABCArgU8(nav, ctx, args[4], vtmp, sizeof(vtmp), exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(fb, ctx, args[5], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(tb, ctx, args[6], exception)) return JSValueMakeUndefined(ctx);
-  if (!JABCBytesOf(dest, ctx, args[7], exception)) return JSValueMakeUndefined(ctx);
-  size_t off = (size_t)JSValueToNumber(ctx, args[8], exception);
-  u64cs from = {(u64c*)fb[0], (u64c*)fb[1]}, to = {(u64c*)tb[0], (u64c*)tb[1]};
+  u8* fbb[4] = {};
+  u8* tbb[4] = {};
+  u8* destb[4] = {};
+  if (!JABCDataOf(fbb, ctx, args[5], exception)) JABC_UNDEF;
+  if (!JABCDataOf(tbb, ctx, args[6], exception)) JABC_UNDEF;
+  if (!JABCIdleOf(destb, ctx, args[7], exception)) JABC_UNDEF;
+  if (!JABCBufFed(destb, ctx, args[8], exception)) JABC_UNDEF;  //  DATA = [0,off)
+  u64cs from = {(u64c*)u8bDataC(fbb)[0], (u64c*)u8bDataC(fbb)[1]};
+  u64cs to = {(u64c*)u8bDataC(tbb)[0], (u64c*)u8bDataC(tbb)[1]};
   u8cs namec = {name[0], name[1]}, schc = {sch[0], sch[1]}, navc = {nav[0], nav[1]};
-  JABCemit em = {{dest[0] + off, dest[1]}, OK};
+  JABCemit em = {{u8bIdle(destb)[0], u8bIdle(destb)[1]}, OK};
   ok64 o = WEAVEEmitFull(&w, namec, schc, navc, from, to, JABCweaveEmitCb, &em);
   if (o != OK || em.err != OK) JABC_THROW("weave.emitFull: failed (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(em.into[0] - dest[0]));
+  return JSValueMakeNumber(
+      ctx, (double)(u8bDataLen(destb) + (size_t)(em.into[0] - u8bIdle(destb)[0])));
 }
 
 //  _weave_merged(blob, len, groups[], outIdle) -> bytes written
@@ -345,23 +352,25 @@ static JABC_FN(JABCweaveMerged) {
   JSObjectRef ga = JSValueToObject(ctx, args[2], exception);
   if (ga == NULL) JABC_THROW("weave.merged: groups must be an array");
   JSStringRef ls = JSStringCreateWithUTF8CString("length");
-  u32 ng = (u32)JSValueToNumber(ctx, JSObjectGetProperty(ctx, ga, ls, exception), exception);
+  u32 ng = 0;
+  if (!JABCu32Of(&ng, ctx, JSObjectGetProperty(ctx, ga, ls, exception),
+                 exception)) { JSStringRelease(ls); JABC_UNDEF; }
   JSStringRelease(ls);
   if (ng > 32) JABC_THROW("weave.merged: at most 32 groups");
   weavescope groups[32];
   for (u32 i = 0; i < ng; i++) {
-    u8s gb = {};
-    if (!JABCBytesOf(gb, ctx, JSObjectGetPropertyAtIndex(ctx, ga, i, exception), exception))
-      return JSValueMakeUndefined(ctx);
-    groups[i][0] = (u64c*)gb[0];
-    groups[i][1] = (u64c*)gb[1];
+    u8* gb[4] = {};
+    if (!JABCDataOf(gb, ctx, JSObjectGetPropertyAtIndex(ctx, ga, i, exception),
+                    exception))
+      JABC_UNDEF;
+    groups[i][0] = (u64c*)u8bDataC(gb)[0];
+    groups[i][1] = (u64c*)u8bDataC(gb)[1];
   }
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[3], exception)) return JSValueMakeUndefined(ctx);
-  u8* bb[4] = {out[0], out[0], out[0], out[1]};
+  u8* bb[4] = {};
+  if (!JABCIdleOf(bb, ctx, args[3], exception)) JABC_UNDEF;
   if (WEAVEEmitMerged(&w, (weavescope const*)groups, ng, bb) != OK)
     JABC_THROW("weave.merged: failed (out full?)");
-  return JSValueMakeNumber(ctx, (double)(size_t)(bb[2] - out[0]));
+  return JSValueMakeNumber(ctx, (double)u8bDataLen(bb));
 }
 
 static inline void JABCWeaveInstall(JSObjectRef o) {

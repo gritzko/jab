@@ -22,17 +22,19 @@
 //  The lexer runs in place on `outU8`; the caller advances its cursor by n*4.
 static JABC_FN(JABCtokParseInto) {
   if (argc < 3) JABC_THROW("tok._tok_parse_into(srcBytes, lang, outU8)");
-  u8s source = {};
-  if (!JABCBytesOf(source, ctx, args[0], exception)) return JSValueMakeUndefined(ctx);
-  size_t srcn = $len(source);
+  u8* sourceb[4] = {};
+  if (!JABCDataOf(sourceb, ctx, args[0], exception)) JABC_UNDEF;
+  u8 const* const* source = u8bDataC(sourceb);
+  size_t srcn = u8bDataLen(sourceb);
   if (srcn > TOK_OFF_MASK)  //  24-bit end offset cap (16 MiB) -> HUNKTOKOOB
     JABC_THROW("tok.parse: source > 16 MiB");
   u8 exttmp[64];
   u8s ext = {};
   if (!JABCArgU8(ext, ctx, args[1], exttmp, sizeof(exttmp), exception))
     return JSValueMakeUndefined(ctx);
-  u8s out = {};
-  if (!JABCBytesOf(out, ctx, args[2], exception)) return JSValueMakeUndefined(ctx);
+  u8* outb[4] = {};
+  if (!JABCIdleOf(outb, ctx, args[2], exception)) JABC_UNDEF;
+  u8* const* out = u8bIdle(outb);
   //  A zero-copy Uint32Array view over the written bytes needs a 4-aligned
   //  write position; validate before running so a misuse is a clean throw,
   //  not a corrupt/aliased array.
