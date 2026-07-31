@@ -7,7 +7,7 @@
 #include "hunk.hpp"
 #include "pack.hpp"
 #include "ulog.hpp"
-#include "weave.hpp"
+#include "cfold.hpp"
 
 //  The container framework: per-(family,lane) prototypes whose verbs are bound
 //  once to the native _heap_*/_hash_* leaves, plus the all-mmap constructors
@@ -315,84 +315,82 @@ static const char* JABC_CONT_JS = R"JS(
     PROTO["ULOG"] = P;
   }
 
-  //  WEAVE: one file's whole DAG history as a 'W' TLV blob in a u8 buffer.
-  //  Parsed zero-copy per call; fold()/merge() rewrite the WHOLE blob.  Commit
-  //  ids are 16-char hex hashlet strings (the hi64 of the commit sha1).  The
-  //  token cursor (rewind()/next() + getters) is WEAVEStep; fold = WEAVENext.
+  //  CFOLD (DIS-082): one file's whole DAG history as a 'V' TLV blob in a u8
+  //  buffer — the APPEND-ONLY weave.  Parsed zero-copy per call; fold()/merge()
+  //  rewrite the WHOLE blob.  Commit ids are 16-char hex hashlet strings (the
+  //  hi64 of the commit sha1) and every rev argument is one of them: visibility
+  //  is STORED per commit, so no scope bitmaps and no token cursor exist.
   {
     const P = Object.create(Uint8Array.prototype);
-    P.empty = function () { return abc._weave_count(this, this.buffer.watermark | 0) === 0; };
+    P.empty = function () { return abc._cfold_count(this, this.buffer.watermark | 0) === 0; };
+    //  size = the 'E' INDEX entry count (inserts + tombs + chain terminators),
+    //  not the visible-token count; tokens() answers that per rev.
     Object.defineProperty(P, "size",
-      { get() { return abc._weave_count(this, this.buffer.watermark | 0); } });
+      { get() { return abc._cfold_count(this, this.buffer.watermark | 0); } });
     Object.defineProperty(P, "commits",
-      { get() { return abc._weave_commits(this, this.buffer.watermark | 0); } });
-    //  builders rewrite THIS buffer; base/a/b are other WEAVE containers (or
-    //  null base for the first revision).  blob is file bytes (Uint8Array or Buf).
+      { get() { return abc._cfold_commits(this, this.buffer.watermark | 0); } });
+    //  builders rewrite THIS buffer; base is another CFOLD container (or null
+    //  for the first revision).  blob is file bytes (Uint8Array or Buf), and
+    //  `ancestors` is the commit's whole causal closure (itself excluded).
     const bytesOf = (x) => (x && typeof x.data === "function") ? x.data() : x;
-    P.fold = function (base, blob, ext, hash) {
+    P.fold = function (base, blob, ext, hash, ancestors) {
       const bl = base ? (base.buffer.watermark | 0) : 0;
-      this.buffer.watermark = abc._weave_next(this, base || null, bl, bytesOf(blob), ext, hash);
-      return this.rewind();
+      this.buffer.watermark = abc._cfold_next(this, base || null, bl,
+        bytesOf(blob), ext, hash, ancestors || []);
+      return this;
     };
-    P.merge = function (a, b, hash) {
-      this.buffer.watermark = abc._weave_merge(this, a, a.buffer.watermark | 0,
-        b, b.buffer.watermark | 0, hash);
-      return this.rewind();
+    //  a merge carries no content: ONE already-folded weave in, one commit
+    //  record out with the intersected ignore-set.
+    P.merge = function (base, hash, ancestors) {
+      this.buffer.watermark = abc._cfold_merge(this, base,
+        base.buffer.watermark | 0, hash, ancestors || []);
+      return this;
     };
-    P.rewind = function () {
-      if (!this._cur) this._cur = new Uint32Array(6); else this._cur.fill(0);
-      this._tok = null;
+    P.alive = function (out) {
+      out.fed(abc._cfold_alive(this, this.buffer.watermark | 0, out.idle()));
+      return out;
+    };
+    P.produce = function (rev, out) {
+      out.fed(abc._cfold_produce(this, this.buffer.watermark | 0, rev, out.idle()));
+      return out;
+    };
+    //  which commit inserted the token at body offset `off` -> its hashlet.
+    P.blame = function (off) {
+      return abc._cfold_blame(this, this.buffer.watermark | 0, off | 0);
+    };
+    //  the per-token cursor (the iteration API): rewind(rev) arms a JS-owned
+    //  cursor, next() steps once and sets this.tok — text (a view into this
+    //  blob), tag, off/end (BODY offsets: feed off to blame()), alive.
+    P.rewind = function (rev) {
+      this._rev = rev;
+      this._cur = new Uint32Array(
+          abc._cfold_itermem(this, this.buffer.watermark | 0));
       return this;
     };
     P.next = function () {
-      if (!this._cur) this._cur = new Uint32Array(6);
-      const t = abc._weave_step(this, this.buffer.watermark | 0, this._cur);
-      this._tok = (t === false) ? null : t;
-      return t !== false;
+      const t = abc._cfold_step(this, this.buffer.watermark | 0,
+                                this._rev, this._cur);
+      if (!t) return false;
+      this.tok = t;
+      return true;
     };
-    const cur = (k) => function () { return this._tok ? this._tok[k] : undefined; };
-    Object.defineProperty(P, "tag",       { get: cur("tag") });
-    Object.defineProperty(P, "tokText",   { get: cur("text") });
-    Object.defineProperty(P, "hasIn",     { get: cur("hasIn") });
-    Object.defineProperty(P, "inserter",  { get: cur("inserter") });
-    Object.defineProperty(P, "rms",       { get: cur("rms") });
-    Object.defineProperty(P, "anchor",    { get: cur("anchor") });
-    Object.defineProperty(P, "hasAnchor", { get: cur("hasAnchor") });
-    //  scope: active-commit bitmap (Uint8Array) over an array of hashlet strings.
-    P.scope = function (activeHashlets) {
-      return abc._weave_scope(this, this.buffer.watermark | 0, activeHashlets || []);
-    };
-    P.alive = function (out) {
-      out.fed(abc._weave_alive(this, this.buffer.watermark | 0, out.idle()));
-      return out;
-    };
-    P.produce = function (scope, out) {
-      out.fed(abc._weave_produce(this, this.buffer.watermark | 0, scope, out.idle()));
-      return out;
-    };
-    //  diff from-scope -> to-scope as HUNK records appended into a HUNK
-    //  container `hunk` (toks carry the per-token diff side); read/render it
-    //  with the HUNK cursor (next()/uri/text/toks/plain/color/html).
+    //  diff from-rev -> to-rev (commit hashlets) as HUNK records appended into
+    //  a HUNK container `hunk` (toks carry the per-token diff side); read/render
+    //  it with the HUNK cursor (next()/uri/text/toks/plain/color/html).
     P.emitDiff = function (from, to, name, navver, hunk) {
-      hunk.buffer.watermark = abc._weave_emitdiff(this, this.buffer.watermark | 0,
+      hunk.buffer.watermark = abc._cfold_emitdiff(this, this.buffer.watermark | 0,
         name || "", navver || "", from, to, hunk, hunk.buffer.watermark | 0);
       return hunk;
     };
     P.emitFull = function (from, to, name, scheme, navver, hunk) {
-      hunk.buffer.watermark = abc._weave_emitfull(this, this.buffer.watermark | 0,
+      hunk.buffer.watermark = abc._cfold_emitfull(this, this.buffer.watermark | 0,
         name || "", scheme || "", navver || "", from, to, hunk, hunk.buffer.watermark | 0);
       return hunk;
     };
-    //  N-way conflict render into out: groups is an array of side scopes
-    //  ([ours, theirs, ...]); divergent regions get the standard merge fences.
-    P.merged = function (groups, out) {
-      out.fed(abc._weave_merged(this, this.buffer.watermark | 0, groups, out.idle()));
-      return out;
-    };
-    PROTO["WEAVE"] = P;
+    PROTO["CFOLD"] = P;
   }
 
-  const isLog = (f) => f === "HUNK" || f === "ULOG" || f === "WEAVE";   // u8-backed
+  const isLog = (f) => f === "HUNK" || f === "ULOG" || f === "CFOLD";   // u8-backed
 
   function build(family, u8) {
     const proto = PROTO[family];
@@ -479,9 +477,6 @@ static const char* JABC_CONT_JS = R"JS(
   };
   abc.merge = (inputs, out) => kway("_merge_", "merge", inputs, out);
   abc.intersect = (inputs, out) => kway("_isect_", "intersect", inputs, out);
-
-  //  WEAVE token identity/anchor hash: hashlet(RAPHash(commit-id ++ ordinal)).
-  abc.weaveIdHash = (hash, ord) => abc._weave_idhash(hash, ord | 0);
 
   //  git: the git/pack-log package (JS-024).  `git.pack` is the offset-pure
   //  PACK container (migrated, hard cutover, off the old abc "PACK" family);
@@ -938,7 +933,7 @@ ok64 JABCContInstall() {
   JABCHunkInstall(abc);
   JABCPackInstall(abc);
   JABCUlogInstall(abc);
-  JABCWeaveInstall(abc);
+  JABCCfoldInstall(abc);
   JABCExecute(JABC_CONT_JS);
   return OK;
 }

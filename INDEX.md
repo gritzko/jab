@@ -54,7 +54,7 @@ A `console` global layering over `utf8.Encode` + `io.writeAll` (holds no native 
 
 ###  cont.cpp — container framework over abc logs
 
-Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`) and the `git` package; families are HEAP/HASH/HUNK/ULOG/WEAVE (PACK migrated to `git`).
+Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, plus the mmap constructors (`abc.ram`/`mmap`/`over`/`book`) and the `git` package; families are HEAP/HASH/HUNK/ULOG/CFOLD (PACK migrated to `git`).
 
  -  `abc.ram`/`mmap`/`over`/`book` — build a container over anon mmap / a file / an existing view / a sparse book file.
  -  `abc.merge`/`abc.intersect` — k-way merge / intersect of sorted inputs into an out region.
@@ -63,7 +63,6 @@ Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, pl
  -  `git.delta.apply(base, delta, out)` — see `pack.hpp`; reconstruct a delta target into an out `Buf`.
  -  `git.tree(bytes[, cb])` — pull cursor over a tree blob: `.next()` → `.mode`/`.name` (zero-copy)/`.str`/`.sha`; `cb` form runs in-frame.
  -  `git.parseCommit(bytes)` — eager parse → `{tree, parents[], foster[], author, committer, body}` (hex shas, decoded idents).
- -  `abc.weaveIdHash(hash, ord)` — WEAVE token identity hash, `hashlet(RAPHash(commit-id ++ ordinal))`.
 
 ###  index.hpp — INDEX binding: the mmap LSM (JS-022)
 
@@ -95,15 +94,16 @@ The stateless row codec over a JS `Uint8Array` (the `abc.ram("ULOG")` cursor fam
  -  `_ulog_open(path)`→handle / `_ulog_close(handle)` — `ULOGOpen`/`ULOGClose` a booked log; close trims to PAST+DATA (drops the zero pad) and frees the box.
  -  `_ulog_append(handle, ts, verb, uri)` — `ULOGAppendAt` (arg order = the on-disk row `<ts>\t<verb>\t<uri>`), ts-preserving + monotonic (stale ts → ULOGCLOCK throw); `_ulog_count`/`_ulog_rowUri`/`_ulog_rowTime` read back rows.
 
-###  weave.hpp — WEAVE binding over dog/WEAVE
+###  cfold.hpp — CFOLD binding over dog/CFOLD (DIS-082)
 
-A WEAVE container is a u8 buffer holding ONE 'W' blob, parsed zero-copy per call; commit ids cross as 16-char hex hashlet strings (all u64↔hex in the leaf).
+A CFOLD container is a u8 buffer holding ONE 'V' blob — the APPEND-ONLY weave — parsed zero-copy per call; commit ids cross as 16-char hex hashlet strings (all u64↔hex in the leaf) and every rev argument is one of them. Scope bitmaps, the token identity hash and the step cursor are all gone: visibility is stored per commit, identity IS the body offset.
 
- -  `fold`/`merge` — `WEAVENext`/`WEAVEMerge`, rewrite the whole blob (fold a diff in / merge revs).
- -  `alive`/`produce`/`scope` — `WEAVEAlive`/`WEAVEProduce`/`WEAVEScope`: the live text, per-rev produce, scope bitmaps.
- -  `rewind`/`next` — the `WEAVEStep` token cursor.
- -  `emitDiff`/`emitFull` — append diff `'H'` records into a HUNK container; the C callback is the sink (no JS closure).
- -  `merged` — `WEAVEEmitMerged` renders an N-side merge into a `Buf`, framing divergent runs with the standard git-style conflict fences.
+ -  `fold(base, blob, ext, hash, ancestors)` — `CFOLDFold`; `ancestors` is the commit's whole causal closure (itself excluded), and everything already folded and not named there lands in its ignore-set.
+ -  `merge(base, hash, ancestors)` — `CFOLDMerge` over ONE weave (no weave pair): a merge carries no content, only a commit record with the intersected ignore-set.
+ -  `alive`/`produce(rev, out)` — `CFOLDAlive`/`CFOLDProduce`; an unknown rev is reported in plain words.
+ -  `blame(off)` — `CFOLDBlame`, the range binary search: which commit appended the token at that body offset.
+ -  `tokens(rev, u32out)` — `CFOLDTokens`, the ONE flat decode that replaces the step cursor: two u32 per visible token in document order, (cumulative end in the produced text, inserting commit index).
+ -  `emitDiff`/`emitFull` — append diff `'H'` records into a HUNK container; the C callback is the sink (no JS closure). Fenced merge renders are retired (DIS-080): merged bytes are the produce at the merge commit.
 
 ###  tok.cpp / tok.hpp — generic source tokenizer (JS-023)
 
