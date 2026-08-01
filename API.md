@@ -281,6 +281,47 @@ try {
 to stdout. `tty.openpty()` → `{master, slave}` and `tty.setSize(fd, rows, cols)`
 are pty test support (no controlling tty exists under ctest).
 
+##  fsw — directory watcher (JAB-031)
+
+Over abc/FSW: inotify on Linux, kqueue on macOS/BSD. `fsw.init()` returns a
+**pollable fd**, so a watcher is just another fd for `pol.watch(wfd, pol.IN,
+…)` — `FSWPoll` is deliberately unbound, `pol.run` owns the blocking. Stateless
+like every leaf: C holds no watch table; the `wfd → dir` map lives in JS.
+
+```js
+let wfd = fsw.init();              // watcher fd (inotify_init1 / kqueue)
+fsw.dir(wfd, "/tmp/x");            // arm one dir level (non-recursive)
+let b = io.buf(1 << 16);
+let n = fsw.drain(wfd, b);         // non-blocking; → record count (0 = nothing queued)
+fsw.records(b);                    // → [{wd, name}, …] parsed out of the Buf
+fsw.close(wfd);
+```
+
+`fsw.drain` packs each event into the caller's `Buf` as **u32 `wd`, u32 name
+length, name bytes** (both ints little-endian); room is checked per whole
+record, so DATA never holds a torn one, and an overflowing Buf throws (the
+already-read events are lost — size the Buf for your burst).
+
+The name is inotify's **bare basename**, never a path: compose it with the dir
+you armed. On kqueue the name is **empty** — the event carries no filename, so
+treat it as "rescan this dir". The `wd` slot is **always 0 today**: `FSWDir`
+discards inotify's watch descriptor and `FSWDrain` does not report one, so the
+field is reserved (see the fix-up note in `INDEX.md`).
+
+```js
+let w = fsw.watch("/tmp/x", (name, dir) => { /* name === "" → rescan dir */ });
+pol.run(pol.NEVER);
+fsw.unwatch(w);                    // pol.unwatch + fsw.close
+```
+
+`fsw.watch` opens **one watcher fd per dir** (the fd is the dir's identity while
+the `wd` is unavailable), keeps the map and the drain `Buf`, and registers the
+`pol` handler. Watches cannot be removed one by one (`FSWUndir` was deleted
+under ABC-013); on kqueue `fsw.close` leaves the pinned dir fd open, so
+`RLIMIT_NOFILE` is the macOS ceiling. Linux costs one fd per watcher plus a
+kernel watch per dir, capped by `max_user_watches` (8192); a burst deeper than
+`max_queued_events` drops events, so a consumer must tolerate a missed name.
+
 ##  text
 
 ```js

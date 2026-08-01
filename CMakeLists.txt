@@ -47,8 +47,11 @@ include_directories(
 # node codegen step (node is not a build dependency).
 # abc/POL.c (pol) and NET/TCP/UDP.c (net/dgram) are stripped from abc-core
 # (grouped with CURL); compile them straight into jab for the socket/loop leaves.
+# JAB-031: abc/FSW.c is in no abc library either (it had zero consumers) —
+# same treatment as POL.c: compiled straight into jab for the fsw leaves.
 set(JABC_SRC main.cpp arg.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp
-    pol.cpp ${ABC_DIR}/POL.c net.cpp ${ABC_DIR}/NET.c ${ABC_DIR}/TCP.c ${ABC_DIR}/UDP.c)
+    pol.cpp ${ABC_DIR}/POL.c net.cpp ${ABC_DIR}/NET.c ${ABC_DIR}/TCP.c ${ABC_DIR}/UDP.c
+    fsw.cpp ${ABC_DIR}/FSW.c)
 
 # JAB-001: the runtime binary is `jab` — a standalone runner divorced from `be`
 # (internal JABC* C++ symbols + add_test names stay).
@@ -102,6 +105,9 @@ add_test(NAME JABCansi COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ansi.js)
 add_test(NAME JABCconsole COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/console.js)
 add_test(NAME JABCtty COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/tty.js)
 add_test(NAME JABCpol COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/pol.js)
+# JAB-031: fsw — arm a temp dir, create a file, drain the name (inotify).
+add_test(NAME JABCfsw COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/fsw.js)
+set_tests_properties(JABCfsw PROPERTIES TIMEOUT 20)
 add_test(NAME JABCnet COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/net.js)
 add_test(NAME JABCnetGrow COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/netgrow.js)
 # JS-035: top-level test/js dir (not js-local), so ${CMAKE_SOURCE_DIR}.
@@ -152,5 +158,5 @@ add_test(NAME JABCleakLoop
 # but are not our leaks; suppress JSC-internal allocations by library name.
 # JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
 # dropped from this unconditional list so configure does not abort without be/.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCnet JABCargv JABCrequireJsrc PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")

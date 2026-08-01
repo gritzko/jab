@@ -138,6 +138,16 @@ The `poll(2)` loop, rule #4 kept: C holds NO per-fd JS closures — the `fd→ha
  -  `pol.run(ns)`/`stop`/`sleep`/`any`/`now` — drive (`pol.NEVER`=forever), break, sleep, query; a handler throw unwinds `run()`.
  -  `pol.init(maxfd)` — (re)size the fd table + clear state (refused mid-loop). Consts: `pol.IN/OUT/ERR/HUP/PRI/NVAL`, `pol.SEC/MS/NEVER`.
 
+###  fsw.cpp — `fsw` directory watcher over abc/FSW (JAB-031)
+
+inotify (Linux) / kqueue (macOS/BSD) behind a pollable fd, so a watcher rides the existing `pol` loop (`FSWPoll` is unbound on purpose). Rule #4 kept: C holds no watch table — the `wfd→dir` map, the drain `Buf` and the handler live in an embedded JS bundle. `abc/FSW.c` is in no abc library (it had zero consumers), so jab compiles it in like `POL.c`. Contract in [API.md].
+
+ -  `fsw.init()` → wfd / `fsw.dir(wfd, path)` — create a watcher, arm ONE dir level (no removal: `FSWUndir` died under ABC-013).
+ -  `fsw.drain(wfd, buf)` → n — non-blocking; packs `u32 wd, u32 len, name` records into the caller's `Buf` (whole-record room check; overflow throws).
+ -  `fsw.records(buf)` → `[{wd, name}]` — the JS-side parser; `name` is a BARE basename (inotify) or `""` (kqueue → rescan the dir).
+ -  `fsw.watch(dir, fn)`/`unwatch(wfd)` — sugar: one watcher fd per dir + `pol.watch(wfd, pol.IN, …)`; `fn(name, dir)` per event.
+ -  fix-up owed: `FSWDir` discards inotify's watch descriptor and `FSWDrain` reports none, so the packed `wd` is always 0 and one wfd per dir is the only way to tell dirs apart.
+
 ###  net.cpp — net/dgram + Node timers over pol
 
 A Node-style async API on top of `pol`: native socket leaves return bare fds, the EventEmitter, per-socket `Buf`s, and the timer wheel live in the embedded JS bundle. Contract in [NET.md].
@@ -181,7 +191,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 
 `main()` maps `ABC_BASS`, builds the context, installs the modules, runs `--eval`/script, then drains the loop.  The binary is `jab` (renamed from `jabc`, JAB-001).
 
- -  module install order — utf8 → io → buf → console → cont → tok → uri → codec → zip → ansi → tty → pol → net → require.
+ -  module install order — utf8 → io → buf → console → cont → tok → uri → codec → zip → ansi → tty → pol → net → fsw → require.
  -  script entry — JAB-001: an EXPLICIT path (`/`,`./`,`../`) runs the file directly (global eval); a BARE name sets `__mainSpec` and runs `__main` (the require machine, upward `jsrc/`-scan).
  -  argv exposure — `JABCInstallArgv` sets the global `args` (tokens after the script) + Node-ish `process.argv` (`["jab", script, ...]`).
  -  build stamp — the same `process` carries read-only `version`/`build`/`build_date` from `dog/VERSN` (`JABCProcVersn`); "unknown" off a git checkout.
@@ -191,5 +201,6 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 ##  Tests
 
  -  `test/jabc_test.cpp` — C++ harness over utf8/Buf/io + the `ron` time codec (`jabc_test`, ctest `JABCtestCpp`).
- -  ctest targets — one `JABC*` per module (`codec`/`tok`/`index`/`pack`/`git`/`weave`/`pol`/`net`/... + family tests), each a `test/*.js` on `jab` (the ctest NAMEs + internal `JABC*` symbols keep their `JABC` prefix).
+ -  ctest targets — one `JABC*` per module (`codec`/`tok`/`index`/`pack`/`git`/`weave`/`pol`/`net`/`fsw`/... + family tests), each a `test/*.js` on `jab` (the ctest NAMEs + internal `JABC*` symbols keep their `JABC` prefix).
+ -  `test/fsw.js` (`JABCfsw`) — JAB-031: arm a temp dir, create a file, drain the name; the name assert is inotify-only (kqueue reports none).
  -  `lsan.supp` — suppresses JSC-internal singleton leaks by library name.
