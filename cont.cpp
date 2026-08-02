@@ -746,30 +746,32 @@ static const char* JABC_CONT_JS = R"JS(
       return this;
     };
 
-    //  snapshot the (live) query sources, newest-first: the sorted memtable
-    //  slice (if non-empty) followed by the runs newest->oldest.
+    //  snapshot the (live) query sources, OLDEST-FIRST (the DOG-027 HIT age
+    //  contract): the runs oldest->newest, then the sorted memtable slice last.
     const querySources = () => {
       const src = [];
+      for (let i = 0; i < idx.runs.length; i++) {
+        const r = idx.runs[i];
+        src.push(r.subarray(0, (r.buffer.watermark | 0) * M.w));
+      }
       if (idx.mem.size > 0) {
         //  JS-105: sort only a dirty memtable; warm reads skip the introsort.
         if (idx._memDirty) { idx.mem.sort(); idx._memDirty = false; }
         src.push(idx.mem.subarray(0, (idx.mem.buffer.watermark | 0) * M.w));
       }
-      for (let i = idx.runs.length - 1; i >= 0; i--) {
-        const r = idx.runs[i];
-        src.push(r.subarray(0, (r.buffer.watermark | 0) * M.w));
-      }
-      return src;                                          // newest-first
+      return src;                                          // oldest-first
     };
 
-    //  point get: scan sources newest-first; FindGE the key-low needle, read
-    //  the element, accept iff its key matches (keeper KEEPLookup pattern).
-    //  Returns the value (u64: the scalar; wh128: the val for that key) or
-    //  undefined.  Newest source wins (shadowing).
+    //  point get: scan sources newest-first (from the array END); FindGE the
+    //  key-low needle, read the element, accept iff its key matches (keeper
+    //  KEEPLookup pattern).  Returns the value (u64: the scalar; wh128: the
+    //  val for that key) or undefined.  Newest source wins (shadowing).
     idx.get = M.pair
       ? function (key) {
           key = BigInt(key);
-          for (const s of querySources()) {
+          const src = querySources();
+          for (let k = src.length - 1; k >= 0; k--) {
+            const s = src[k];
             const i = findge(s, key, 0n);                  // needle (key, 0)
             if (i * M.w < s.length && s[i * M.w] === key) return s[i * M.w + 1];
           }
@@ -777,7 +779,9 @@ static const char* JABC_CONT_JS = R"JS(
         }
       : function (v) {
           v = BigInt(v);
-          for (const s of querySources()) {
+          const src = querySources();
+          for (let k = src.length - 1; k >= 0; k--) {
+            const s = src[k];
             const i = findge(s, v);
             if (i < s.length && s[i] === v) return v;
           }
@@ -820,19 +824,19 @@ static const char* JABC_CONT_JS = R"JS(
     //  the snapshotted memtable) at the first element >= needle, then pull ONE
     //  merged entry per .next() in ascending order.  Sources carry their JS
     //  position; a tiny binary min-heap (indices into `srcs`) orders the current
-    //  heads; full-element newest-wins dedup (sources are newest-first, so the
-    //  first head equal to the just-emitted element wins and the rest are
-    //  skipped).  ALL state is JS-owned (no held native cursor) — the only
+    //  heads; full-element dedup (dup heads are byte-identical, so every head
+    //  equal to the just-emitted element is skipped, source order immaterial).
+    //  ALL state is JS-owned (no held native cursor) — the only
     //  native call is the per-source _findge_ binary search at seek time.
     //
     //  Memtable consistency: querySources() sorts the memtable in place and
-    //  snapshots its live slice as the NEWEST source, so a pending put is
+    //  snapshots its live slice as the NEWEST (last) source, so a pending put is
     //  visible to the cursor exactly as it is to get/range — no auto-flush, no
     //  fork (the snapshot is a subarray view; further puts after seek are not
     //  reflected, matching the "snapshot on seek" contract).
     idx.seek = function (...needle) {
       const M_ = M;
-      const sources = querySources();                // newest-first slices
+      const sources = querySources();                // oldest-first slices
       //  srcs[k] = { s: view, i: cursor index, n: element count }.  Position
       //  each at the first element >= needle via the native binary search.
       const srcs = [];
@@ -843,13 +847,14 @@ static const char* JABC_CONT_JS = R"JS(
         if (i < n) srcs.push({ s, i, n });
       }
       //  binary min-heap of indices into srcs, ordered by head element; ties
-      //  break by source order (newest first) so dedup keeps the newest.
+      //  break by source index only to keep the order strict (equal heads
+      //  are identical full elements, so the winner is immaterial).
       const heap = [];                               // holds k = index in srcs
       const lt = (a, b) => {
         const A = srcs[a], B = srcs[b];
         if (headLT(A.s, A.i, B.s, B.i)) return true;
         if (headLT(B.s, B.i, A.s, A.i)) return false;
-        return a < b;                                // equal heads: newer wins
+        return a < b;                                // equal heads: identical
       };
       const up = (c) => {
         while (c > 0) {
