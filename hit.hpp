@@ -5,8 +5,9 @@
 //                (QSORTx <lane>sSort).
 //   - merge:     k-way sorted, deduplicated union of N runs (HITx Merge).
 //   - intersect: values present in ALL N runs (HITx Intersect).
-//  The heap-of-iterators is a tiny stack array (<=64 runs); inputs stay alive
-//  as JS args; the output is a fresh engine-owned typed array.
+//  The heap-of-iterators is a tiny stack array (<= HIT_MAX_RUNS runs, abc/
+//  HITx.h; above it the leaf throws — DOG-027); inputs stay alive as JS args;
+//  the output is a fresh engine-owned typed array.
 //
 //  Leaves: _sort_<lane>(arr, size)
 //          _merge_<lane>(runs[]) / _isect_<lane>(runs[]) -> Uint8Array
@@ -17,24 +18,9 @@ extern "C" {
 #include "dog/WHIFF.h"
 #include "dog/git/SHA1.h"
 #include "abc/SHA.h"
-
-//  HIT's one prerequisite (HIT.md): swap two slice entries.  Array types
-//  can't go through Sx.h, so it's defined per lane here in js/.
-#define CSSWAP(L)                                              \
-  fun void L##csSwap(L##cs* a, L##cs* b) {                     \
-    L const* t0 = (*a)[0];                                     \
-    L const* t1 = (*a)[1];                                     \
-    (*a)[0] = (*b)[0];                                         \
-    (*a)[1] = (*b)[1];                                         \
-    (*b)[0] = t0;                                              \
-    (*b)[1] = t1;                                              \
-  }
-//  u8 and wh128 already have csSwap (defined elsewhere in the include graph);
-//  define it for the remaining lanes only.
-CSSWAP(u16) CSSWAP(u32) CSSWAP(u64)
-CSSWAP(kv32) CSSWAP(kv64) CSSWAP(wh64)
-CSSWAP(sha1) CSSWAP(sha256)
 }
+//  DOG-027: the per-lane csSwap supply block is gone — HIT swaps entry
+//  POINTERS now, so csSwap is no longer an instantiation prerequisite.
 
 //  QSORTx (sSort) ONLY for lanes abc/dog don't already instantiate.
 //  Already present: u8/u16/u32/u64 (INT.h), kv64 (KV.h).  Missing → add:
@@ -55,7 +41,7 @@ CSSWAP(sha1) CSSWAP(sha256)
 #undef X
 
 //  HITx (Start/Merge/Intersect) for every lane — not pre-instantiated
-//  anywhere; needs the csSwap defined above.
+//  anywhere.
 #define X(M, name) M##u8##name
 #include "abc/HITx.h"
 #undef X
@@ -119,8 +105,10 @@ CSSWAP(sha1) CSSWAP(sha256)
     if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
                    exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
-    if (N > 64) JABC_THROW("merge: too many runs (max 64)");                  \
-    L##cs ent[64];                                                            \
+    /* DOG-027: one cap, and above it the leaf just throws */                 \
+    if (N > HIT_MAX_RUNS)                                                     \
+      JABC_THROW("too many index runs: drop them and re-derive the index");   \
+    L##cs ent[HIT_MAX_RUNS];                                                  \
     size_t total = 0;                                                         \
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \

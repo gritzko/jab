@@ -23,6 +23,9 @@
 //        Returns the merged element count + how many youngest runs (m) it
 //        collapsed, so JS replaces runs[len-m .. len) with the one merged run.
 //
+//  DOG-027: runs[] is OLDEST-FIRST — HIT breaks equal heads by highest entry
+//  pointer.  Not checkable here (bare views, no seqno); the handle asserts it.
+//
 //  Lanes: the two REAL shapes — wh128 (keeper puppy registry: (key,val), point
 //  on key) and u64 (spot trigram: scalar).  u64 keys/needles/lo/hi cross as
 //  BigInt; wh128 as (key,val) BigInt pairs.  kv64 is DEFERRED (its Z is key-
@@ -85,7 +88,8 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
     if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
                    exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
-    if (N > 64) JABC_THROW("_seekrange: too many runs (max 64)");             \
+    if (N > HIT_MAX_RUNS)                                                     \
+      JABC_THROW("too many index runs: drop them and re-derive the index");   \
     L lo = RDLO, hi = RDHI;                                                   \
     if (*exception) return JSValueMakeUndefined(ctx);                         \
     JSValueRef cbv = args[1 + 2 * (ARGN)];                                    \
@@ -93,7 +97,7 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
         !JSObjectIsFunction(ctx, (JSObjectRef)cbv))                          \
       JABC_THROW("_seekrange: cb must be a function");                        \
     JSObjectRef cb = (JSObjectRef)cbv;                                        \
-    L##cs ent[64];                                                            \
+    L##cs ent[HIT_MAX_RUNS];                                                  \
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \
           JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);       \
@@ -106,9 +110,10 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
     L##css heap = {ent, ent + N};                                            \
     HIT##L##SeekRange(heap, &lo, &hi);                                        \
     /* DOG-027: drain via the pointer heap; entries stay oldest-first */      \
-    L##csp slots[64];                                                         \
+    L##csp slots[HIT_MAX_RUNS];                                               \
     L##csps ph;                                                               \
-    HIT##L##Load(ph, slots, heap);                                            \
+    if (HIT##L##Load(ph, slots, heap) != OK)                                  \
+      JABC_THROW("too many index runs: drop them and re-derive the index");   \
     while (!$empty(ph)) {                                                     \
       L const* top = (*ph[0])[0];                                             \
       JSValueRef el = EMIT;                                                   \
@@ -146,8 +151,9 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
     if (!JABCu64Of(&N, ctx, JSObjectGetProperty(ctx, arr, lk, exception),     \
                    exception)) JABC_UNDEF;                                    \
     JSStringRelease(lk);                                                      \
-    if (N > 64) JABC_THROW("_compact: too many runs (max 64)");               \
-    L##cs ent[64];                                                            \
+    if (N > HIT_MAX_RUNS)                                                     \
+      JABC_THROW("too many index runs: drop them and re-derive the index");   \
+    L##cs ent[HIT_MAX_RUNS];                                                  \
     for (size_t i = 0; i < N; i++) {                                          \
       JSValueRef el =                                                         \
           JSObjectGetPropertyAtIndex(ctx, arr, (unsigned)i, exception);       \

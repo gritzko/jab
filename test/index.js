@@ -417,4 +417,45 @@ function freshdir(name) {
   io.log("index.js JS-106 bulk feed OK");
 }
 
+// ==========================================================================
+//  DOG-027: ONE run cap (HIT_MAX_RUNS = 64) across BOTH leaves.  Above it the
+//  leaf just THROWS — no windowing, no repair cascade, no youngest-64 batch.
+//  A stack that deep is damaged: drop the runs and re-derive.
+// ==========================================================================
+{
+  const CAP = 64;
+  const mkruns = (n) => {
+    const rs = [];
+    for (let i = 0; i < n; i++) {
+      const h = abc.ram("HEAPu64", 1);
+      h.push(BigInt(i));
+      rs.push(h);
+    }
+    return rs;
+  };
+  const throws = (f) => {
+    try { f(); } catch (x) { return "" + x; }
+    return "";
+  };
+  const over = mkruns(CAP + 1), at = mkruns(CAP);
+
+  for (const [name, f] of [
+    ["merge",     (rs) => abc.merge(rs)],
+    ["intersect", (rs) => abc.intersect(rs)],
+    ["compact",   (rs) => abc._compact_u64(rs, abc.ram("HEAPu64", 128))],
+    ["seekrange", (rs) => abc._seekrange_u64(rs, 0n, 1000n, () => {})],
+  ]) {
+    const msg = throws(() => f(over));
+    if (!msg.includes("too many index runs"))
+      fail("DOG-027 " + name + " above the cap: " + (msg || "no throw"));
+    const ok = throws(() => f(at));
+    if (ok) fail("DOG-027 " + name + " AT the cap must work: " + ok);
+  }
+
+  //  and the merge at exactly the cap really merged all 64 runs
+  eq(abc.merge(mkruns(CAP)).length, CAP, "DOG-027 merge at the cap");
+
+  io.log("index.js DOG-027 run cap OK");
+}
+
 io.log("index.js OK");
