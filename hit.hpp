@@ -40,7 +40,7 @@ extern "C" {
 #include "abc/QSORTx.h"
 #undef X
 
-//  HITx (Start/Merge/Intersect) for every lane — not pre-instantiated
+//  HITx (Merge/Intersect) for every lane — not pre-instantiated
 //  anywhere.
 #define X(M, name) M##u8##name
 #include "abc/HITx.h"
@@ -136,7 +136,6 @@ extern "C" {
       L##s dst = {db, (L*)d[1]};                                             \
       if (N > 0) {                                                            \
         L##css heap = {ent, ent + N};                                         \
-        HIT##L##Start(heap);                                                  \
         ok64 mo = isect ? HIT##L##Intersect(heap, dst, N)                     \
                         : HIT##L##Merge(heap, dst);                           \
         if (mo != OK) JABC_THROW("merge: out too small");                     \
@@ -151,7 +150,6 @@ extern "C" {
     L##s op = {ob, ob + total};                                               \
     if (N > 0) {                                                              \
       L##css heap = {ent, ent + N};                                           \
-      HIT##L##Start(heap);                                                    \
       ok64 mo = isect ? HIT##L##Intersect(heap, op, N)                        \
                       : HIT##L##Merge(heap, op);                              \
       if (mo != OK) JABC_THROW("merge: out too small");                       \
