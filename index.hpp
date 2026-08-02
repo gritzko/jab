@@ -105,8 +105,12 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
     }                                                                         \
     L##css heap = {ent, ent + N};                                            \
     HIT##L##SeekRange(heap, &lo, &hi);                                        \
-    while (!$empty(heap)) {                                                   \
-      L const* top = (*heap[0])[0];                                           \
+    /* DOG-027: drain via the pointer heap; entries stay oldest-first */      \
+    L##csp slots[64];                                                         \
+    L##csps ph;                                                               \
+    HIT##L##Load(ph, slots, heap);                                            \
+    while (!$empty(ph)) {                                                     \
+      L const* top = (*ph[0])[0];                                             \
       JSValueRef el = EMIT;                                                   \
       JSValueRef exc = NULL;                                                  \
       JSValueRef r = JSObjectCallAsFunction(ctx, cb, NULL, 1, &el, &exc);     \
@@ -124,7 +128,7 @@ static inline u64 JABCIdxU64(JSContextRef ctx, const JSValueRef args[], size_t i
         JSStringRelease(s);                                                   \
         if (strcmp(tag, "enough") == 0) break;                                \
       }                                                                       \
-      HIT##L##Step(heap);                                                     \
+      HIT##L##Step(ph);                                                       \
     }                                                                         \
     return JSValueMakeUndefined(ctx);                                         \
   }
