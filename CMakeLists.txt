@@ -117,18 +117,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/test/js/get/zip.js)
     set_tests_properties(JABCzip PROPERTIES
         ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
 endif()
-# JS-048: bin/lib/ulog.js (ULOG read+write: drain readers + crash-safe
-# monotonic appender) + bin/lib/store.js (object + ref read+write: ref
-# resolve readers + createShard/set/tombstone writers), pure-JS unit tests
-# on jabc.  (JABCulog is the abc ULOG-binding test under js/test/, distinct.)
-# JS-063: be-shard unit tests moved to ../be/test/ (JS-061); guard each so a
-# checkout without the be submodule skips rather than errors.
-if(EXISTS ${CMAKE_SOURCE_DIR}/../be/test/ulog.js)
-    add_test(NAME JABCulogLib COMMAND jab ${CMAKE_SOURCE_DIR}/../be/test/ulog.js)
-endif()
-if(EXISTS ${CMAKE_SOURCE_DIR}/../be/test/store.js)
-    add_test(NAME JABCstore COMMAND jab ${CMAKE_SOURCE_DIR}/../be/test/store.js)
-endif()
+# DOG-027: JABCulogLib/JABCstore are GONE — they ran ../be/test/*.js, i.e. a
+# sibling repo's JS reached by local path, so a jab API change went red here
+# with the only fix living in be/.  be/ tests belong to be/'s own suite.
 
 # Script argv reaches JS: run a generated script with a tail of args and grep the
 # JSON it logs to stderr (`args` + Node-shaped `process.argv`) — JS-015.
@@ -156,7 +147,5 @@ add_test(NAME JABCleakLoop
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-# JS-095: JABCulogLib/JABCstore are be/-gated (created only with the be/ sibling);
-# dropped from this unconditional list so configure does not abort without be/.
 set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
