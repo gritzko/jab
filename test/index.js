@@ -1,14 +1,15 @@
 "use strict";
-// JS-022: abc.index(lane, {dir, ext, mem}) — a mmap LSM index over a stack of
-// immutable sorted runs + a memtable.  Verbs: put / flush / compact / get
-// (point) / range / prefix.  Queries stream hits through an IN-FRAME callback
-// (rule #4) that returns a stop signal (mirror io.readdir(path, cb)).
+// DOG-027: abc.index(lane, {dir, ext}) — a HANDLE on a dog Pup stack.  The LSM
+// (runs + memtable + the 1/8 ladder + the run naming) is C; this surface is
+// put / commit / get / range / seek / count / run / drop / close and nothing
+// else — `runs`, `_seq`, `mem`, `flush` and `compact` are gone.
 //
-// Two real lanes: wh128 (keeper puppy registry: (key,val), point on KEY) and
-// u64 (spot trigram: scalar).  We assert POINT/RANGE/PREFIX against a plain-JS
-// brute-force oracle (a sorted array doing the same lookups).
+// Three lanes: kv64 (keyed — newest wins per key), wh128 (keeper puppy
+// registry: (key,val) rows, point on KEY) and u64 (spot trigram: scalar).
+// Queries stream through an IN-FRAME callback whose return is a stop signal.
 function fail(m) { throw "FAIL " + m; }
 function eq(a, b, m) { if (a !== b) fail(m + ": " + a + " !== " + b); }
+function throws(f) { try { f(); } catch (x) { return "" + x; } return ""; }
 
 const DIR = "/tmp/jabc_index_" + process.pid;
 
@@ -21,44 +22,30 @@ function freshdir(name) {
 }
 
 // ==========================================================================
-//  u64 lane (spot trigram shape): scalar BigInt keys.
+//  put / get / commit round trip, per lane.  A put lands in the memtable and
+//  is visible at once; commit seals it into a run and the answers do not move.
 // ==========================================================================
 {
   const dir = freshdir("u64");
-  const idx = abc.index("u64", { dir, ext: ".u64", mem: 4096 });
-  // brute-force oracle: a JS Set of the same scalars (newest-wins is moot for
-  // a set; dedup is intrinsic).
+  const idx = abc.index("u64", { dir, ext: ".u64" });
   const oracle = new Set();
   const add = (v) => { idx.put(BigInt(v)); oracle.add(BigInt(v)); };
 
-  // batch 1 -> flush to run 0
   for (const v of [5, 100, 17, 42, 9, 256, 257, 258, 1000, 999]) add(v);
-  idx.flush();
-  eq(idx.runs.length, 1, "u64 one run after first flush");
-
-  // batch 2 (overlaps) -> flush to run 1
+  eq(idx.get(42n), 42n, "u64 memtable hit before commit");
+  idx.commit();
   for (const v of [42, 7, 8, 9, 300, 301, 302, 2000, 256]) add(v);
-  idx.flush();
-  eq(idx.runs.length, 2, "u64 two runs after second flush");
+  idx.commit();
+  for (const v of [11, 12]) add(v);          // live memtable, uncommitted
 
-  // batch 3 -> run 2 (tiny, drives the ladder)
-  for (const v of [11, 12]) add(v);
-  idx.flush();
-  idx.compact();                        // 1/8 ladder: collapse the small tail
-  if (idx.runs.length > 3) fail("u64 compact did not shrink the stack");
-
-  // POINT: get every member + a non-member
   const sorted = [...oracle].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const v of sorted) {
-    const g = idx.get(v);
-    eq(g, v, "u64 point hit " + v);
-  }
+  for (const v of sorted) eq(idx.get(v), v, "u64 point hit " + v);
   eq(idx.get(123456n), undefined, "u64 point miss");
 
-  // RANGE [lo, hi): drain via the in-frame callback
+  // RANGE [lo, hi) through the in-frame cb (undefined => keep going)
   const collect = (lo, hi) => {
     const out = [];
-    idx.range(BigInt(lo), BigInt(hi), (v) => { out.push(v); });   // undefined => continue
+    idx.range(BigInt(lo), BigInt(hi), (v) => { out.push(v); });
     return out;
   };
   const oracleRange = (lo, hi) =>
@@ -68,359 +55,245 @@ function freshdir(name) {
   eq(JSON.stringify(collect(0, 100000).map(String)),
      JSON.stringify(oracleRange(0, 100000).map(String)), "u64 range all");
 
-  // RANGE early stop: cb returns false after 3 hits
+  // early stop: `false` and "enough" both end the scan
   {
     let n = 0;
-    idx.range(0n, 100000n, () => { n++; return n < 3; });   // false => stop
-    eq(n, 3, "u64 range early stop");
+    idx.range(0n, 100000n, () => { n++; return n < 3; });
+    eq(n, 3, "u64 range early stop on false");
+    let m = 0;
+    idx.range(0n, 100000n, () => { m++; return m >= 4 ? "enough" : "more"; });
+    eq(m, 4, "u64 range early stop on enough");
   }
 
-  // PREFIX(p, lowBits) == range [p, p + 2^lowBits): the 256..258/300..302
-  // block lives in [256, 256+256) and [256,512) but not in [256,256+2)
-  const prefixCollect = (p, bits) => {
+  // prefix(p, bits) == range [p, p + 2^bits)
+  {
     const out = [];
-    idx.prefix(BigInt(p), bits, (v) => { out.push(v); });
-    return out;
-  };
-  eq(JSON.stringify(prefixCollect(256, 8).map(String)),
-     JSON.stringify(oracleRange(256, 256 + 256).map(String)), "u64 prefix 256/8");
-
+    idx.prefix(256n, 8, (v) => { out.push(v); });
+    eq(JSON.stringify(out.map(String)),
+       JSON.stringify(oracleRange(256, 256 + 256).map(String)), "u64 prefix 256/8");
+  }
+  idx.close();
   io.log("index.js u64 OK");
 }
 
 // ==========================================================================
-//  wh128 lane (keeper puppy registry shape): (key,val), point lookup on KEY.
-//  Newest run shadows older at QUERY time (v1 deletes via shadowing, no
-//  tombstone drop); compaction's full-element dedup collapses identical rows.
+//  wh128: (key,val) rows, point lookup on the KEY.  Rows with one key and
+//  different vals coexist (the lane's Z is the whole element); an identical
+//  row across runs collapses.
 // ==========================================================================
-
-//  --- part A: newest-run-wins SHADOW across runs (no compaction). ----------
 {
-  const dir = freshdir("wh128_shadow");
-  const idx = abc.index("wh128", { dir, ext: ".w", mem: 4096 });
-  // oracle Map key->val, newest write wins (mirrors the across-run shadow).
+  const dir = freshdir("wh128");
+  const idx = abc.index("wh128", { dir, ext: ".w" });
   const oracle = new Map();
   const add = (k, v) => { idx.put(BigInt(k), BigInt(v)); oracle.set(BigInt(k), BigInt(v)); };
 
-  for (const [k, v] of [[10, 1], [20, 2], [30, 3], [40, 4], [50, 5]]) add(k, v);
-  idx.flush();
-  // batch 2 shadows key 30 with a NEW value in a NEWER run (newest-run-wins).
-  for (const [k, v] of [[30, 99], [15, 15], [25, 25], [60, 6]]) add(k, v);
-  idx.flush();
-  eq(idx.runs.length, 2, "wh128 shadow: two runs");
+  for (const [k, v] of [[10, 1], [20, 2], [30, 3], [40, 4]]) add(k, v);
+  idx.commit();
+  for (const [k, v] of [[40, 4], [15, 15], [25, 25], [60, 6]]) add(k, v);  // dup row (40,4)
+  idx.commit();
+  for (const [k, v] of [[12, 12], [70, 7]]) add(k, v);                     // live memtable
 
-  const keys = [...oracle.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const k of keys) eq(idx.get(k), oracle.get(k), "wh128 shadow point key " + k);
-  eq(idx.get(30n), 99n, "wh128 newest-run-wins shadow");
-  eq(idx.get(999n), undefined, "wh128 shadow point miss");
-  io.log("index.js wh128 shadow OK");
-}
-
-//  --- part B: distinct (key,val) rows -> POINT/RANGE/PREFIX through compact.
-//  Keys are unique per the keeper shape (a key maps to one stable val), so
-//  full-element dedup is the only collapse and queries stay exact post-ladder.
-{
-  const dir = freshdir("wh128");
-  const idx = abc.index("wh128", { dir, ext: ".w", mem: 4096 });
-  const oracle = new Map();   // key -> val (unique keys)
-  const add = (k, v) => { idx.put(BigInt(k), BigInt(v)); oracle.set(BigInt(k), BigInt(v)); };
-
-  for (const [k, v] of [[10, 1], [20, 2], [30, 3], [40, 4], [50, 5]]) add(k, v);
-  idx.flush();
-  // batch 2: a DUPLICATE row (40,4) (collapses under dedup) + new keys.
-  for (const [k, v] of [[40, 4], [15, 15], [25, 25], [60, 6], [70, 7]]) {
-    idx.put(BigInt(k), BigInt(v)); oracle.set(BigInt(k), BigInt(v));
-  }
-  idx.flush();
-  for (const [k, v] of [[5, 50], [80, 8]]) add(k, v);
-  idx.flush();
-  idx.compact();                            // 1/8 ladder collapses the tail
-  if (idx.runs.length > 3) fail("wh128 compact did not shrink the stack");
-
-  // POINT on key
-  const keys = [...oracle.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const k of keys) eq(idx.get(k), oracle.get(k), "wh128 point key " + k);
+  for (const [k, v] of oracle) eq(idx.get(k), v, "wh128 point hit " + k);
   eq(idx.get(999n), undefined, "wh128 point miss");
 
-  // RANGE over KEYS [lo, hi): cb([k,v]) per pair, ascending by (key,val).
-  const collectKeys = (lo, hi) => {
-    const out = [];
-    idx.range(BigInt(lo), BigInt(hi), (pair) => { out.push(Number(pair[0])); });
-    return out;
-  };
-  const oracleKeys = (lo, hi) =>
-    keys.filter((k) => k >= BigInt(lo) && k < BigInt(hi)).map(Number);
-  eq(JSON.stringify(collectKeys(10, 60)),
-     JSON.stringify(oracleKeys(10, 60)), "wh128 range keys [10,60)");
-
-  // RANGE early stop via cb returning false
+  // the duplicated (40,4) row is emitted ONCE
   {
-    let n = 0;
-    idx.range(0n, 1000n, () => { n++; return n < 2; });
-    eq(n, 2, "wh128 range early stop");
-  }
-
-  // PREFIX on key: [p, p + 2^bits)
-  const prefixKeys = (p, bits) => {
     const out = [];
-    idx.prefix(BigInt(p), bits, (pair) => { out.push(Number(pair[0])); });
-    return out;
-  };
-  eq(JSON.stringify(prefixKeys(0, 6)),
-     JSON.stringify(oracleKeys(0, 64)), "wh128 prefix 0/6");
-
+    idx.range(0n, 1000n, (p) => { out.push(Number(p[0])); });
+    eq(out.filter((k) => k === 40).length, 1, "wh128 dup row collapses");
+    eq(JSON.stringify(out), JSON.stringify([...oracle.keys()].map(Number).sort((a, b) => a - b)),
+       "wh128 range == oracle keys");
+  }
+  idx.close();
   io.log("index.js wh128 OK");
 }
 
 // ==========================================================================
-//  IN-MEMORY index (no opts.dir): io.ram runs, NO files on disk.  Same
-//  put/flush/compact/get/range as on-disk; matches the oracle; leaves the
-//  filesystem untouched (we watch a scratch dir for stray run files).
+//  kv64 is the KEYED lane: kv64Z compares keys only, so a second put of one
+//  key SHADOWS the first — newest wins, memtable over run and run over run.
 // ==========================================================================
 {
-  // a clean watch dir to prove NOTHING gets written to disk
-  const watch = freshdir("mem_watch");
-  const before = io.readdir(watch).sort().join(",");
+  const dir = freshdir("kv64");
+  const idx = abc.index("kv64", { dir, ext: ".kv" });
+  idx.put(10, 1).put(20, 2).put(30, 3).commit();     // run 0
+  idx.put(20, 22).commit();                          // run 1 shadows key 20
+  idx.put(30, 33);                                   // memtable shadows key 30
 
-  const idx = abc.index("u64", { mem: 4096 });    // no dir => in-memory
-  eq(idx.onDisk, false, "in-mem onDisk flag");
-  if (idx.dir != null) fail("in-mem index must have no dir");
+  eq(idx.get(10), 1n, "kv64 untouched key");
+  eq(idx.get(20), 22n, "kv64 newer RUN wins");
+  eq(idx.get(30), 33n, "kv64 MEMTABLE wins over the run");
+  eq(idx.get(99), undefined, "kv64 point miss");
 
-  const oracle = new Set();
-  const add = (v) => { idx.put(BigInt(v)); oracle.add(BigInt(v)); };
-
-  for (const v of [5, 100, 17, 42, 9, 256, 257, 258, 1000, 999]) add(v);
-  idx.flush();
-  eq(idx.runs.length, 1, "in-mem one run after first flush");
-  if (idx.runs[0]._path != null) fail("in-mem run must have no _path (no file)");
-
-  for (const v of [42, 7, 8, 9, 300, 301, 302, 2000, 256]) add(v);
-  idx.flush();
-  for (const v of [11, 12]) add(v);
-  idx.flush();
-  idx.compact();                                  // RAM->RAM merge
-  if (idx.runs.length > 3) fail("in-mem compact did not shrink the stack");
-
-  // POINT + RANGE + PREFIX vs the oracle (identical to the on-disk path)
-  const sorted = [...oracle].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const v of sorted) eq(idx.get(v), v, "in-mem point hit " + v);
-  eq(idx.get(123456n), undefined, "in-mem point miss");
-
-  const collect = (lo, hi) => {
+  // a merged scan yields one row per key, each the newest
+  {
     const out = [];
-    idx.range(BigInt(lo), BigInt(hi), (v) => { out.push(v); });
-    return out;
-  };
-  const oracleRange = (lo, hi) =>
-    sorted.filter((v) => v >= BigInt(lo) && v < BigInt(hi));
-  eq(JSON.stringify(collect(8, 300).map(String)),
-     JSON.stringify(oracleRange(8, 300).map(String)), "in-mem range [8,300)");
-  const pfx = [];
-  idx.prefix(256n, 8, (v) => { pfx.push(v); });
-  eq(JSON.stringify(pfx.map(String)),
-     JSON.stringify(oracleRange(256, 256 + 256).map(String)), "in-mem prefix 256/8");
-
-  // NO FILES: the watch dir is unchanged AND nothing was written under it.
-  const after = io.readdir(watch).sort().join(",");
-  eq(after, before, "in-mem index wrote NO files to disk");
-
-  io.log("index.js in-memory OK");
+    idx.range(0, 1000, (p) => { out.push(Number(p[0]) + "=" + Number(p[1])); });
+    eq(out.join(","), "10=1,20=22,30=33", "kv64 range newest-wins");
+  }
+  // and the same through the seek cursor
+  {
+    const c = idx.seek(0);
+    const out = [];
+    while (c.next()) out.push(Number(c.key) + "=" + Number(c.val));
+    eq(out.join(","), "10=1,20=22,30=33", "kv64 seek newest-wins");
+  }
+  idx.close();
+  io.log("index.js kv64 newest-wins OK");
 }
 
 // ==========================================================================
-//  .seek(needle) PULL cursor: positions every source at the first entry
-//  >= needle, then .next() advances ONE merged entry at a time in sorted
-//  order; full-element newest-wins dedup; .key/.val/.entry; false at end.
-//  Pulled across MULTIPLE runs + a NON-EMPTY memtable, for BOTH lanes; the
-//  caller stops early after K and matches the oracle's tail slice.
+//  seek(k): a merged PULL cursor at the first row >= k, ascending, deduped,
+//  spanning the committed runs AND the live memtable.  .key/.val/.entry, and
+//  next() goes false past the last row.
 // ==========================================================================
-
-//  --- u64: scalars across 3 runs + live memtable ---------------------------
 {
-  const dir = freshdir("seek_u64");
-  const idx = abc.index("u64", { dir, ext: ".u64", mem: 4096 });
+  const dir = freshdir("seek");
+  const idx = abc.index("u64", { dir, ext: ".u64" });
   const oracle = new Set();
   const add = (v) => { idx.put(BigInt(v)); oracle.add(BigInt(v)); };
-
-  for (const v of [5, 100, 17, 42, 9, 256]) add(v);   idx.flush();
-  for (const v of [42, 7, 8, 300, 256, 9]) add(v);    idx.flush();   // overlaps
-  for (const v of [11, 12, 999]) add(v);              idx.flush();
-  for (const v of [3, 13, 257, 9]) add(v);            // <- live memtable, no flush
-
+  for (const v of [5, 100, 17, 42, 9]) add(v);   idx.commit();
+  for (const v of [7, 8, 9, 300, 256]) add(v);   idx.commit();
+  for (const v of [11, 12]) add(v);              idx.commit();
+  for (const v of [3, 500]) add(v);              // live memtable
   const sorted = [...oracle].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const tailFrom = (needle) => sorted.filter((v) => v >= BigInt(needle));
+  const tailFrom = (k) => sorted.filter((v) => v >= BigInt(k));
 
-  // full pull from a needle: must equal the oracle's tail slice exactly
-  const pullAll = (needle) => {
+  const pullAll = (k) => {
     const out = [];
-    const c = idx.seek(BigInt(needle));
+    const c = idx.seek(BigInt(k));
     while (c.next()) out.push(c.val);
     return out;
   };
   eq(JSON.stringify(pullAll(0).map(String)),
-     JSON.stringify(tailFrom(0).map(String)), "u64 seek(0) full");
+     JSON.stringify(tailFrom(0).map(String)), "seek(0) full merge");
   eq(JSON.stringify(pullAll(10).map(String)),
-     JSON.stringify(tailFrom(10).map(String)), "u64 seek(10) tail");
-  eq(JSON.stringify(pullAll(256).map(String)),
-     JSON.stringify(tailFrom(256).map(String)), "u64 seek(256) tail");
-  eq(JSON.stringify(pullAll(100000).map(String)),
-     JSON.stringify(tailFrom(100000).map(String)), "u64 seek past-end empty");
+     JSON.stringify(tailFrom(10).map(String)), "seek(10) tail");
+  eq(JSON.stringify(pullAll(100000)), "[]", "seek past the end is empty");
 
-  // dedup: every value distinct, none repeats (the heads overlap across runs)
   {
-    const all = pullAll(0);
-    const seen = new Set(all.map(String));
-    eq(seen.size, all.length, "u64 seek dedups duplicates across runs+mem");
-  }
-
-  // .key/.val/.entry mirror for a scalar lane; cursor positions on first >=
-  {
-    const c = idx.seek(11n);
-    if (!c.next()) fail("u64 seek(11) yields nothing");
-    eq(c.key, 11n, "u64 seek first key");
-    eq(c.val, 11n, "u64 seek first val");
-    eq(c.entry, 11n, "u64 seek first entry");
-  }
-
-  // stop EARLY after K: pull 3 from needle=8, compare to the oracle tail head
-  {
-    const want = tailFrom(8).slice(0, 3);
+    const c = idx.seek(10n);
+    if (!c.next()) fail("seek(10) yields nothing");
+    eq(c.key, 11n, "seek first key");
+    eq(c.val, 11n, "seek first val");
+    eq(c.entry, 11n, "seek first entry");
+    // stop EARLY: pull 2 more and walk away
     const got = [];
-    const c = idx.seek(8n);
-    for (let i = 0; i < 3 && c.next(); i++) got.push(c.val);
+    for (let i = 0; i < 2 && c.next(); i++) got.push(c.val);
     eq(JSON.stringify(got.map(String)),
-       JSON.stringify(want.map(String)), "u64 seek early-stop after 3");
+       JSON.stringify(tailFrom(10).slice(1, 3).map(String)), "seek early stop");
   }
-
-  io.log("index.js seek u64 OK");
-}
-
-//  --- wh128: (key,val) across 3 runs + live memtable -----------------------
-{
-  const dir = freshdir("seek_wh128");
-  const idx = abc.index("wh128", { dir, ext: ".w", mem: 4096 });
-  // unique keys (keeper shape): seek/range order by (key,val), dedup is
-  // full-element.  Oracle = Map key->val, newest write wins (shadow).
-  const oracle = new Map();
-  const add = (k, v) => { idx.put(BigInt(k), BigInt(v)); oracle.set(BigInt(k), BigInt(v)); };
-
-  for (const [k, v] of [[10, 1], [20, 2], [30, 3], [40, 4]]) add(k, v);  idx.flush();
-  for (const [k, v] of [[40, 4], [15, 15], [25, 25], [60, 6]]) add(k, v); idx.flush(); // dup (40,4)
-  for (const [k, v] of [[5, 50], [80, 8]]) add(k, v);                     idx.flush();
-  for (const [k, v] of [[12, 12], [70, 7]]) add(k, v);                    // live memtable
-
-  // pairs sorted by (key,val); with unique keys this is key order
-  const pairs = [...oracle.entries()]
-    .map(([k, v]) => [k, v])
-    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const tailFrom = (k) => pairs.filter((p) => p[0] >= BigInt(k));
-
-  const pullAll = (k) => {
-    const out = [];
-    const c = idx.seek(BigInt(k), 0n);
-    while (c.next()) out.push([Number(c.key), Number(c.val)]);
-    return out;
-  };
-  eq(JSON.stringify(pullAll(0)),
-     JSON.stringify(tailFrom(0).map((p) => [Number(p[0]), Number(p[1])])),
-     "wh128 seek(0) full");
-  eq(JSON.stringify(pullAll(20)),
-     JSON.stringify(tailFrom(20).map((p) => [Number(p[0]), Number(p[1])])),
-     "wh128 seek(20) tail");
-  eq(JSON.stringify(pullAll(1000)), "[]", "wh128 seek past-end empty");
-
-  // .entry is the [key,val] pair; cursor positions on first key >= needle
-  {
-    const c = idx.seek(15n, 0n);
-    if (!c.next()) fail("wh128 seek(15) yields nothing");
-    eq(c.key, 15n, "wh128 seek first key");
-    eq(c.val, 15n, "wh128 seek first val");
-    eq(JSON.stringify([Number(c.entry[0]), Number(c.entry[1])]),
-       JSON.stringify([15, 15]), "wh128 seek first entry pair");
-  }
-
-  // dedup: the duplicated (40,4) row appears ONCE
-  {
-    const all = pullAll(0);
-    const n40 = all.filter((p) => p[0] === 40).length;
-    eq(n40, 1, "wh128 seek collapses the duplicated (40,4) row");
-  }
-
-  // stop EARLY after K=2 from key>=20
-  {
-    const want = tailFrom(20).slice(0, 2).map((p) => [Number(p[0]), Number(p[1])]);
-    const got = [];
-    const c = idx.seek(20n, 0n);
-    for (let i = 0; i < 2 && c.next(); i++) got.push([Number(c.key), Number(c.val)]);
-    eq(JSON.stringify(got), JSON.stringify(want), "wh128 seek early-stop after 2");
-  }
-
-  io.log("index.js seek wh128 OK");
-}
-
-//  --- JS-106: bulk feed — mem.feed(entries view) + idx.feed (chunked). -----
-{
-  //  heap-level: feed(view) == a push per entry; pop order is the oracle
-  //  (pops off a valid heap always come out in Z order).
-  const a = abc.ram("HEAPwh128", 64), b = abc.ram("HEAPwh128", 64);
-  const kv = [];
-  for (let i = 0; i < 20; i++) kv.push(BigInt((i * 7) % 20), BigInt(i));
-  const view = new BigUint64Array(kv);
-  for (let i = 0; i < view.length; i += 2) a.push(view[i], view[i + 1]);
-  b.feed(view);
-  eq(b.size, 20, "JS-106 wh128 feed size");
-  for (let i = 0; i < 20; i++) {
-    const x = a.pop(), y = b.pop();
-    eq(y[0], x[0], "JS-106 wh128 feed pop key " + i);
-    eq(y[1], x[1], "JS-106 wh128 feed pop val " + i);
-  }
-
-  const c = abc.ram("HEAPu64", 16), d = abc.ram("HEAPu64", 16);
-  const v64 = new BigUint64Array([5n, 1n, 9n, 3n, 7n]);
-  for (const v of v64) c.push(v);
-  d.feed(v64);
-  eq(d.size, 5, "JS-106 u64 feed size");
-  for (let i = 0; i < 5; i++) eq(d.pop(), c.pop(), "JS-106 u64 feed pop " + i);
-
-  //  errors: overfeed is all-or-nothing; misaligned + self-overlapping throw.
-  const e = abc.ram("HEAPu64", 4);
-  let msg = "";
-  try { e.feed(new BigUint64Array([1n, 2n, 3n, 4n, 5n])); } catch (x) { msg = "" + x; }
-  if (!msg.includes("full")) fail("JS-106 overfeed: " + msg);
-  eq(e.size, 0, "JS-106 overfeed fed nothing");
-  msg = "";
-  try { e.feed(new Uint8Array(17)); } catch (x) { msg = "" + x; }
-  if (!msg.includes("align")) fail("JS-106 misalign: " + msg);
-  e.push(1n);
-  msg = "";
-  try { e.feed(e.subarray(0, 1)); } catch (x) { msg = "" + x; }
-  if (!msg.includes("overlap")) fail("JS-106 overlap: " + msg);
-
-  //  idx-level: one idx.feed(view) == a put per pair, across memtable flushes
-  //  (mem:8 forces chunking + auto-flush inside feed).
-  const bulk = abc.index("wh128", { mem: 8 });
-  const ref = abc.index("wh128", { mem: 8 });
-  const big = [];
-  for (let i = 0; i < 50; i++) big.push(BigInt(1000 + i), BigInt(i));
-  const bw = new BigUint64Array(big);
-  for (let i = 0; i < bw.length; i += 2) {
-    if (ref.mem.size === 8) ref.flush();     // put does not auto-flush
-    ref.put(bw[i], bw[i + 1]);
-  }
-  bulk.feed(bw);
-  bulk.flush(); ref.flush();
-  for (let i = 0; i < 50; i++) {
-    const k = BigInt(1000 + i);
-    eq(bulk.get(k), ref.get(k), "JS-106 idx.feed vs put key " + k);
-    eq(bulk.get(k), BigInt(i), "JS-106 idx.feed get " + k);
-  }
-  io.log("index.js JS-106 bulk feed OK");
+  idx.close();
+  io.log("index.js seek OK");
 }
 
 // ==========================================================================
-//  DOG-027: ONE run cap (HIT_MAX_RUNS = 64) across BOTH leaves.  Above it the
-//  leaf just THROWS — no windowing, no repair cascade, no youngest-64 batch.
-//  A stack that deep is damaged: drop the runs and re-derive.
+//  run(i) / drop(i): the marker-audit path.  A family reads run i, finds no
+//  marker row, and unlinks it — the file goes and the queries forget it.
+// ==========================================================================
+{
+  const dir = freshdir("audit");
+  const idx = abc.index("kv64", { dir, ext: ".kv" });
+  //  each run under a 1/8 of the one before it, so the ladder leaves the
+  //  stack alone and there are three runs to audit
+  for (let i = 0; i < 100; i++) idx.put(1000 + i, i);
+  idx.commit();
+  for (let i = 0; i < 10; i++) idx.put(2000 + i, i);
+  idx.commit();
+  idx.put(3000, 3).commit();
+  eq(idx.count, 3, "audit three committed runs");
+  eq(io.readdir(dir).length, 3, "audit three files on disk");
+
+  // run(i) is a read-only lane-typed view, oldest-first
+  eq(idx.run(0).length, 200, "run(0) is 100 kv64 rows = 200 BigUint64 cells");
+  eq(idx.run(0)[0], 1000n, "run(0) first key");
+  eq(idx.run(1)[0], 2000n, "run(1) first key — oldest-first");
+  eq(idx.run(2)[0], 3000n, "run(2) first key");
+  if (!throws(() => idx.run(9))) fail("run(9) must throw");
+
+  // drop the MIDDLE run: gone from disk and from every query
+  idx.drop(1);
+  eq(idx.count, 2, "after drop(1) two runs");
+  eq(io.readdir(dir).length, 2, "after drop(1) two files");
+  eq(idx.get(2005), undefined, "the dropped run's keys are gone");
+  eq(idx.get(1005), 5n, "the surviving older run answers");
+  eq(idx.get(3000), 3n, "the surviving younger run answers");
+  eq(idx.run(1)[0], 3000n, "the stack closed the gap");
+
+  // drop() with no argument drops them all — the re-derive case
+  idx.drop();
+  eq(idx.count, 0, "drop() drops every run");
+  eq(io.readdir(dir).length, 0, "drop() emptied the dir");
+  eq(idx.get(1005), undefined, "nothing answers after drop()");
+  idx.close();
+  io.log("index.js run/drop audit OK");
+}
+
+// ==========================================================================
+//  Reopening: a dir keeps its ron64-named runs across handles.  A run left by
+//  the RETIRED JS writer (8-char zero-padded name) is NOT a run to the 10-char
+//  scan, so opening the dir IGNORES it — the index reads empty and the family
+//  recomputes it, but the legacy file stays on disk; an open deletes nothing.
+// ==========================================================================
+{
+  const dir = freshdir("reopen");
+  // two legacy runs, written the way jab's JS memtable used to book them
+  for (const seq of [1, 2]) {
+    const mem = abc.ram("HEAPu64", 128);
+    for (let i = 0; i < 100; i++) mem.push(BigInt(100 * seq + i));
+    mem.sort();
+    const out = abc.book("HEAPu64", dir + "/" + String(seq).padStart(8, "0") + ".u64", mem.size);
+    abc.merge([mem], out);
+    abc.close(out);
+  }
+  eq(io.readdir(dir).length, 2, "two legacy files planted");
+  {
+    const idx = abc.index("u64", { dir, ext: ".u64" });
+    eq(io.readdir(dir).length, 2, "opening LEFT the legacy files alone");
+    eq(idx.count, 0, "the index reads empty");
+    eq(idx.get(117n), undefined, "a legacy row does not answer");
+    // and the handle is perfectly usable: the family just recomputes
+    for (let i = 0; i < 100; i++) idx.put(BigInt(100 + i));
+    idx.commit();
+    eq(idx.count, 1, "the recomputed run committed");
+    eq(idx.get(117n), 117n, "the recomputed index answers");
+    idx.close();
+  }
+  // reopen: the ron64-named run comes back, and nothing else was harmed
+  {
+    const idx = abc.index("u64", { dir, ext: ".u64" });
+    eq(idx.count, 1, "the ron64 run reopened");
+    eq(idx.get(140n), 140n, "and answers after the reopen");
+    eq(io.readdir(dir).length, 3, "the ron64 run + both legacy files survive");
+    idx.close();
+  }
+  io.log("index.js reopen + legacy skip OK");
+}
+
+// ==========================================================================
+//  The ladder is C's business: a page-full memtable seals itself and the
+//  stack stays shallow.  JS never sees a run count it did not commit for.
+// ==========================================================================
+{
+  const dir = freshdir("ladder");
+  const idx = abc.index("u64", { dir, ext: ".u64" });
+  for (let i = 0; i < 3000; i++) idx.put(BigInt(100000 - i));
+  idx.commit();
+  if (idx.count > 4) fail("the ladder let the stack grow to " + idx.count);
+  eq(idx.get(100000n - 2999n), 100000n - 2999n, "the oldest row survived");
+  eq(idx.get(100000n), 100000n, "the newest row survived");
+  {
+    let n = 0;
+    idx.range(0n, 1000000n, () => { n++; });
+    eq(n, 3000, "every row is queryable after the ladder ran");
+  }
+  idx.close();
+  io.log("index.js ladder OK");
+}
+
+// ==========================================================================
+//  DOG-027: ONE run cap (HIT_MAX_RUNS = 64).  Above it every entry point just
+//  THROWS, in plain words — no windowing, no repair cascade.  A stack that
+//  deep is damaged: drop the runs and re-derive.
 // ==========================================================================
 {
   const CAP = 64;
@@ -432,10 +305,6 @@ function freshdir(name) {
       rs.push(h);
     }
     return rs;
-  };
-  const throws = (f) => {
-    try { f(); } catch (x) { return "" + x; }
-    return "";
   };
   const over = mkruns(CAP + 1), at = mkruns(CAP);
 
@@ -451,10 +320,31 @@ function freshdir(name) {
     const ok = throws(() => f(at));
     if (ok) fail("DOG-027 " + name + " AT the cap must work: " + ok);
   }
-
-  //  and the merge at exactly the cap really merged all 64 runs
   eq(abc.merge(mkruns(CAP)).length, CAP, "DOG-027 merge at the cap");
 
+  // and a DIRECTORY deeper than the cap: the index refuses to open it, in
+  // plain words.  Such a stack is foreign — the cure is to re-derive it.
+  // The names are real 10-char RON64 pup keys, zero-padded exactly the way
+  // dog writes them — an 8-wide name would be unlinked as a legacy run.
+  {
+    const dir = freshdir("cap");
+    const name10 = (k) => {
+      const s = ron.encode(BigInt(k));
+      return "0".repeat(10 - s.length) + s;
+    };
+    eq(name10(1000).length, 10, "a padded pup key is 10 RON64 chars");
+    for (let i = 0; i < CAP + 2; i++) {
+      const mem = abc.ram("HEAPu64", 1);
+      mem.push(BigInt(i));
+      const out = abc.book("HEAPu64", dir + "/" + name10(1000 + i) + ".u64", 1);
+      abc.merge([mem], out);
+      abc.close(out);
+    }
+    eq(io.readdir(dir).length, CAP + 2, "the over-deep dir is planted");
+    const msg = throws(() => abc.index("u64", { dir, ext: ".u64" }));
+    if (!msg.includes("too many index runs"))
+      fail("DOG-027 an over-deep dir must not open: " + (msg || "no throw"));
+  }
   io.log("index.js DOG-027 run cap OK");
 }
 

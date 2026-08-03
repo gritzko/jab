@@ -58,22 +58,28 @@ Per-(family,lane) JS prototypes bound once to pure-marshalling native leaves, pl
 
  -  `abc.ram`/`mmap`/`over`/`book` — build a container over anon mmap / a file / an existing view / a sparse book file.
  -  `abc.merge`/`abc.intersect` — k-way merge / intersect of sorted inputs into an out region.
- -  `abc.index(lane, {dir,ext,mem})` — see `index.hpp`; the mmap LSM constructor.
+ -  `abc.index(lane, {dir,ext})` — see `pup.hpp`; a handle on a dog Pup stack (the LSM itself is C).
  -  `git.pack.{ram,over,mmap,book}` — see `pack.hpp`; the offset-pure PACK container.
  -  `git.delta.apply(base, delta, out)` — see `pack.hpp`; reconstruct a delta target into an out `Buf`.
  -  `git.tree(bytes[, cb])` — pull cursor over a tree blob: `.next()` → `.mode`/`.name` (zero-copy)/`.str`/`.sha`; `cb` form runs in-frame.
  -  `git.parseCommit(bytes)` — eager parse → `{tree, parents[], foster[], author, committer, body}` (hex shas, decoded idents).
 
-###  index.hpp — INDEX binding: the mmap LSM (JS-022)
+###  index.hpp — INDEX leaves over bare run views (JS-022)
 
-The 3 backing-agnostic native leaves an `abc.index` rides, plus the constructor (whose write path is pure JS); lanes `u64` and `wh128` (`kv64` deferred).
+Three backing-agnostic leaves over caller-held typed arrays; lanes `u64` and `wh128`.  `abc.index` no longer rides them — it rides `pup.hpp` — but they stay as the bare-view primitives.
 
  -  `_findge_<lane>`/`_seekrange_<lane>`/`_compact_<lane>` — binary-search point, range/prefix drain, 1/8-ladder compaction leaf.
- -  `abc.index(...)` — a stack of oldest-first sorted runs (`.runs`) + a memtable, on-disk (`dir`) or in-memory (anon `io.ram`).
- -  `.put`/`.flush`/`.compact`/`.get` — write to memtable, merge into a fresh run, compact, point lookup.
- -  `.feed(view)` — JS-106 bulk put of a contiguous entries view (pack.scan's shape), chunked + auto-flushed, one `_heap_<lane>_feed` crossing per chunk.
- -  `.range`/`.prefix` — stream hits through an in-frame cb (no cross-run dedup; collapse is compaction's job).
- -  `.seek(needle)` — pure-JS pull cursor; `.next()` yields one merged entry (min-heap + newest-wins), exposing `.key`/`.val`/`.entry`.
+
+###  pup.hpp — the LSM handle (DOG-027)
+
+`abc.index` IS a dog Pup stack: runs, memtable, run naming and the 1/8 ladder are all C, and this binding marshals only.  Lane is fixed ON CREATE (`kv64`/`wh128`/`u64`) by which per-lane leaf JS calls; each leaf statically knows its `dogpuplane` (sort/dedup/collapse + compaction merge, instantiated here) and passes it down as a plain C parameter — the dict holds runs and the memtable, never a hook.  This INVERTS API.md rule #4 for this subsystem on purpose — one LSM, one home.
+
+ -  `_pup_<lane>_{open,put,commit,get,range,seek,next,count,run,drop,close}` — the whole native surface; `dir`/`ext` cross as JS strings per call.
+ -  `abc.index(lane, {dir, ext})` — the handle; `runs`, `_seq`, `mem`, `flush` and `compact` are GONE.
+ -  `.put`/`.commit` — append to the memtable; seal it into a run (the ladder then runs in C, invisibly).
+ -  `.get`/`.range`/`.prefix` — point lookup (newest wins) and ordered scans through an in-frame cb (`false`/`"enough"` stops).
+ -  `.seek(k)`/`.next()` — a merged pull cursor, one per handle, over the runs plus the live memtable.
+ -  `.count`/`.run(i)`/`.drop(i)`/`.drop()` — the family's marker audit: how many runs, a read-only view of one, unlink one or all.
 
 ###  pack.hpp — PACK + git object parsers (GIT-007/010, JS-028)
 

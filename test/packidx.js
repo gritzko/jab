@@ -45,14 +45,17 @@ eq(JSON.stringify(gotOffs.slice().sort((x, y) => x - y)),
    "scan vals == record offsets");
 
 // ---- pipe entries into a JS-022 abc.index (wh128 lane) --------------------
-const idx = abc.index("wh128", { mem: 4096 });   // in-memory LSM
+const IDXDIR = "/tmp/jabc_packidx_" + process.pid;
+//  DOG-027: an index is a dog Pup stack on disk — no in-memory backing,
+//  and `commit` replaced `flush` (it seals the run and runs the ladder).
+const idx = abc.index("wh128", { dir: IDXDIR + "_a", ext: ".w" });
 const oracle = new Map();                          // key -> val (offset)
 for (let i = 0; i < ents.length; i += 2) {
   const k = ents[i], val = ents[i + 1];
   idx.put(k, val);
   oracle.set(k.toString(), val);
 }
-idx.flush();
+idx.commit();
 
 // sha->offset lookup: for each object, the index returns its byte offset.
 // The key already encodes hashlet60|type; the index get(key) yields the val.
@@ -97,9 +100,9 @@ eq(JSON.stringify(pairSet(app)), JSON.stringify(pairSet(ents)),
    "index-on-append entries == full scan entries");
 
 // and the append entries resolve through the SAME index identically
-const idx2 = abc.index("wh128", { mem: 4096 });
+const idx2 = abc.index("wh128", { dir: IDXDIR + "_b", ext: ".w" });
 for (let i = 0; i < app.length; i += 2) idx2.put(app[i], app[i + 1]);
-idx2.flush();
+idx2.commit();
 for (let i = 0; i < app.length; i += 2)
   eq(idx2.get(app[i]), app[i + 1], "append index get == offset");
 
@@ -156,8 +159,8 @@ for (let i = 0; i < app.length; i += 2)
 {
   const eb = io.buf(p.count * 16 + 64);
   const es = p.scan(eb);
-  const bulk = abc.index("wh128", { mem: 4096 });
-  bulk.feed(es).flush();
+  const bulk = abc.index("wh128", { dir: IDXDIR + "_c", ext: ".w" });
+  bulk.feed(es).commit();
   for (const [kStr, val] of oracle)
     eq(bulk.get(BigInt(kStr)), val, "JS-106 bulk sha->offset " + kStr);
 }
