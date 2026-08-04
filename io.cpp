@@ -289,9 +289,13 @@ static JABC_FN(JABCioSetMtime) {
 //        native FILE_SCAN_DEEP (FILEDeepScanDir).  Dirs marked.
 //   2. io.readdir(path, fn|{callback:fn[, recursive]}) -> undefined   cb(name)
 //        per entry; the cb return is a directive: "more"/truthy/undefined =
-//        continue, "enough"/false = stop the WHOLE scan, "recur" = descend into
-//        this dir first (meaningful only when recursive is false; a no-op once
-//        recursive:true already descends the whole tree).  The cb runs
+//        continue, "enough"/false = stop the WHOLE scan, "skip" = do not descend
+//        into THIS dir but keep scanning its siblings (the prune; meaningful
+//        only when recursive is true, a no-op in the one-level form), "recur" =
+//        descend into this dir first (the mirror: meaningful only when recursive
+//        is false; a no-op once recursive:true already descends the whole tree).
+//        The entry is delivered to the cb BEFORE its directive is read, so
+//        "skip" prunes the subtree, never the dir entry itself.  The cb runs
 //        synchronously inside the scan frame and is never stashed (rule #4); a
 //        cb throw aborts the scan and propagates.
 //   hidden (default false): basenames starting '.' are SKIPPED, and hidden dirs
@@ -367,7 +371,8 @@ static ok64 JABCReaddirEmit(void0p arg, path8p path) {
 }
 
 //  Map a cb's return value onto a scan directive.  "recur" is signalled to the
-//  trampoline via *recur (caller descends); the ok64 return drives continue/stop.
+//  trampoline via *recur (caller descends); the ok64 return drives
+//  continue/skip/stop.
 static ok64 JABCReaddirDirective(JABCReaddirCtx* c, JSValueRef r, b8* recur) {
   *recur = NO;
   if (JSValueIsString(c->ctx, r)) {
@@ -377,6 +382,9 @@ static ok64 JABCReaddirDirective(JABCReaddirCtx* c, JSValueRef r, b8* recur) {
     JSStringRelease(s);
     if (strcmp(tag, "enough") == 0) { c->stop = YES; return JABCSCANSTOP; }
     if (strcmp(tag, "recur") == 0) { *recur = YES; return OK; }
+    //  "skip" is the mirror of "recur" and rides the SAME FILESKIP the hidden
+    //  filter uses: prune this entry's subtree, keep scanning its siblings.
+    if (strcmp(tag, "skip") == 0) return FILESKIP;
     return OK;  //  "more" and any other string -> continue
   }
   //  Non-string: false -> stop, truthy/undefined -> continue.

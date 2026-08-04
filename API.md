@@ -142,7 +142,7 @@ let rp = io.realpath("link");     // → canonical absolute path      (realpath(
 io.chmod("data", 0o755);          // set POSIX perm bits           (FILEChmod)
 io.setMtime("data", st.mtime);    // stamp atime+mtime (ron60 BigInt, NOFOLLOW) (FILESetMtime)
 let ns = io.readdir("dir");       // → string[], dirs marked "x/"  (FILEScanDir)
-io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"recur" directive
+io.readdir("dir", n => "more");   // cb scan: "more"/"enough"/"skip"/"recur"
 let all = io.readdir("dir", {recursive:true});  // → flat subtree   (FILEDeepScanDir)
 let h = io.readdir("dir", {hidden:true});       // → incl. dotfiles ('.x')
 io.readdir("dir", {recursive:true, callback:n=>{}}); // cb across the subtree
@@ -163,8 +163,13 @@ subset). With no callback it returns the `string[]` — one level, or the flat
 full subtree under `recursive:true` (`FILEDeepScanDir`). With a callback it
 returns `undefined` and runs `cb(name)` per entry inside the scan (never
 stashed); the return directs traversal — `"more"`/truthy/`undefined` continue,
-`"enough"`/`false` stop the whole scan, `"recur"` descends into the entry (a
-dir) before the next sibling (a no-op once `recursive:true` already descends).
+`"enough"`/`false` stop the whole scan, `"skip"` prunes the entry's subtree and
+keeps scanning its siblings (a no-op unless `recursive:true`), `"recur"`
+descends into the entry (a dir) before the next sibling (a no-op once
+`recursive:true` already descends). The entry reaches the `cb` before its
+directive is read, so `"skip"` drops the subtree, never the dir entry itself —
+an ignore-aware walk returns `"skip"` on a matched dir instead of enumerating
+its whole subtree and filtering afterwards.
 `hidden` (default `false`) skips dotfile basenames and does not descend hidden
 dirs; `hidden:true` includes them. A `cb` throw aborts and propagates; a
 2nd arg that is neither a function nor an object throws.

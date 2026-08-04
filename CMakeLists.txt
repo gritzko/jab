@@ -78,6 +78,7 @@ add_test(NAME JABChash COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/hash.js)
 add_test(NAME JABCmmap COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmap.js)
 add_test(NAME JABCmmapfd COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmapfd.js)
 add_test(NAME JABCstat COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/stat.js)
+add_test(NAME JABCreaddir COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/readdir.js)
 add_test(NAME JABCchdir COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/chdir.js)
 add_test(NAME JABCsha COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/sha.js)
 add_test(NAME JABChit COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/hit.js)
@@ -147,5 +148,5 @@ add_test(NAME JABCleakLoop
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCreaddir JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
