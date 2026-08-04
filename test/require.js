@@ -85,4 +85,34 @@ function writeFile(path, text) {
   io.unlink(d + "/throw.js");
 }
 
+// JAB-010: a REPEAT require of an already-loaded module must cost ZERO stats —
+// resolve() ran its io.stat ladder before the by-abspath cache could hit.
+{
+  const d = "/tmp/jabc_req_jab010_" + Date.now();
+  io.mkdir(d);
+  writeFile(d + "/rel.js", "module.exports = { v: 11 };");
+  writeFile(d + "/main.js",
+    "module.exports = function (n) { let m; while (n--) {" +
+    " m = require('./rel.js'); m = require(__dirname + '/rel.js'); } return m.v; };");
+  const run = require(d + "/main.js");
+  eq(run(1), 11, "warm-up require");                 // first pass: loads + stats
+  const real = io.stat;
+  let stats = 0;
+  io.stat = function (p) { stats++; return real.call(io, p); };
+  let got, err = null;
+  try { got = run(200); } catch (e) { err = e; } finally { io.stat = real; }
+  if (err !== null) throw err;
+  eq(got, 11, "memoized require still returns the module");
+  eq(stats, 0, "400 repeat requires cost stats");
+  // module identity unchanged: same instance as the direct global require
+  if (require(d + "/rel.js") !== require(d + "/rel.js")) fail("identity");
+  // a FAILED resolution is not memoized: the retry must find a late file
+  const late = d + "/late.js";
+  let threw = false;
+  try { require(late); } catch (e) { threw = true; }
+  if (!threw) fail("missing module not rejected");
+  writeFile(late, "module.exports = { v: 12 };");
+  eq(require(late).v, 12, "failed resolution stays retryable");
+}
+
 io.log("require.js OK");

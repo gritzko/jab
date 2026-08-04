@@ -79,14 +79,30 @@ static const char* JABC_REQUIRE_JS = R"JS(
       if (isFile(c)) return c;
     throw "require: cannot find '" + spec + "' from '" + baseDir + "'";
   }
+  //  JAB-010: memo (baseDir, spec) -> abs, consulted BEFORE resolve(), which
+  //  re-ran its io.stat ladder on every require — even a cache-hit one.
+  const resolved = new Map();
+  function resolveMemo(spec, baseDir) {
+    //  Skip a cwd-dependent pair (relative spec off a relative base): only
+    //  those can change under io.chdir, so today's semantics stay (JS-119).
+    if (isExplicit(spec) && spec[0] !== "/" && baseDir[0] !== "/")
+      return resolve(spec, baseDir);
+    const key = spec.length + ":" + spec + baseDir;   // unambiguous
+    let abs = resolved.get(key);
+    if (abs === undefined) {
+      abs = resolve(spec, baseDir);            // throws: nothing memoized
+      resolved.set(key, abs);
+    }
+    return abs;
+  }
   function makeRequire(baseDir) {
     const req = (spec) => load(spec, baseDir);
-    req.resolve = (spec) => resolve(spec, baseDir);
+    req.resolve = (spec) => resolveMemo(spec, baseDir);
     req.cache = cache;
     return req;
   }
   function load(spec, baseDir) {
-    const abs = resolve(spec, baseDir);
+    const abs = resolveMemo(spec, baseDir);
     if (cache[abs]) return cache[abs].exports;
     const src = utf8.Decode(io.mmap(abs, "r").data());
     const module = { exports: {}, id: abs, filename: abs };

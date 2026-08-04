@@ -192,6 +192,7 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
  -  `require(spec)` — resolve → mmap → wrap in a `Function` → eval → cache; inserted BEFORE eval so cycles see partial exports.
  -  `require.resolve`/`require.cache` — explicit path (`/`,`./`,`../`) resolves `.js`/`/index.js`; a BAREWORD scans UP for `jsrc/` (try `<jsrc>/<name>`,`<name>.js`; ceiling `$HOME/jsrc` else `/jsrc`). By-abspath cache; each module's `require` is bound to its dir.
  -  `__main(spec)` — JAB-001 `jab <bareword>` entry: `resolveJsrc`, patch `process.argv[1]` to the abspath (the `here` idiom), then load it.
+ -  JAB-010: a per-process `(baseDir, spec) -> abs` memo runs BEFORE `resolve()`, so a repeat `require()` of a loaded module costs zero syscalls. Successful resolutions only (a miss stays retryable); a relative spec off a relative base is not memoized (stays `io.chdir`-live).
 
 ###  main.cpp — context, module install, script runner
 
