@@ -969,9 +969,12 @@ static JABC_FN(JABCioLog) {
   for (size_t i = 0; i < argc; i++) {
     if (JSValueIsString(ctx, args[i])) {
       JSStringRef s = JSValueToStringCopy(ctx, args[i], exception);
-      if (*exception) return JSValueMakeUndefined(ctx);
+      if (*exception || s == NULL) return JSValueMakeUndefined(ctx);
       size_t max = JSStringGetMaximumUTF8CStringSize(s);
       char* b = (char*)malloc(max);
+      //  MEM-021: an unchecked NULL here got written by the JSC copy, and
+      //  quietly dropped the whole line when it did not
+      if (b == NULL) { JSStringRelease(s); JABC_THROW("io.log: out of memory"); }
       size_t got = JSStringGetUTF8CString(s, b, max);
       u8s span = {(u8*)b, (u8*)b + (got ? got - 1 : 0)};
       while ($len(span) > 0) {
