@@ -148,11 +148,11 @@ The `poll(2)` loop, rule #4 kept: C holds NO per-fd JS closures — the `fd→ha
 
 inotify (Linux) / kqueue (macOS/BSD) behind a pollable fd, so a watcher rides the existing `pol` loop (`FSWPoll` is unbound on purpose). Rule #4 kept: C holds no watch table — the `wfd→dir` map, the drain `Buf` and the handler live in an embedded JS bundle. `abc/FSW.c` is in no abc library (it had zero consumers), so jab compiles it in like `POL.c`. Contract in [API.md].
 
- -  `fsw.init()` → wfd / `fsw.dir(wfd, path)` — create a watcher, arm ONE dir level (no removal: `FSWUndir` died under ABC-013).
- -  `fsw.drain(wfd, buf)` → n — non-blocking; packs `u32 wd, u32 len, name` records into the caller's `Buf` (whole-record room check; overflow throws).
- -  `fsw.records(buf)` → `[{wd, name}]` — the JS-side parser; `name` is a BARE basename (inotify) or `""` (kqueue → rescan the dir).
- -  `fsw.watch(dir, fn)`/`unwatch(wfd)` — sugar: one watcher fd per dir + `pol.watch(wfd, pol.IN, …)`; `fn(name, dir)` per event.
- -  fix-up owed: `FSWDir` discards inotify's watch descriptor and `FSWDrain` reports none, so the packed `wd` is always 0 and one wfd per dir is the only way to tell dirs apart.
+ -  `fsw.init()` → wfd / `fsw.dir(wfd, path)` → wd — create a watcher, arm ONE dir level; the wd names that dir in every record, so one wfd serves a tree (JAB-032; no removal: `FSWUndir` died under ABC-013).
+ -  `fsw.drain(wfd, buf)` → n — non-blocking; packs `i32 wd, u32 len, name` records into the caller's `Buf` (whole-record room check; overflow throws).
+ -  `fsw.records(buf)` → `[{wd, name}]` — the JS-side parser; `name` is a BARE basename (inotify) or `""` (kqueue, or an event about the watched dir itself → rescan).
+ -  `fsw.OVERFLOW` (-1) / `fsw.onoverflow(fn)` — a wd of -1 means the KERNEL DROPPED events (`max_queued_events`): every cache over this watcher is void.
+ -  `fsw.watch(dir, fn)`/`unwatch(wd)`/`stop()` — sugar: ALL dirs on one lazily-armed wfd + a single `pol.watch`; `fn(name, dir)` per event; `stop()` before any `pol.init()`.
 
 ###  net.cpp — net/dgram + Node timers over pol
 
@@ -208,5 +208,5 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
 
  -  `test/jabc_test.cpp` — C++ harness over utf8/Buf/io + the `ron` time codec (`jabc_test`, ctest `JABCtestCpp`).
  -  ctest targets — one `JABC*` per module (`codec`/`tok`/`index`/`pack`/`git`/`weave`/`pol`/`net`/`fsw`/... + family tests), each a `test/*.js` on `jab` (the ctest NAMEs + internal `JABC*` symbols keep their `JABC` prefix).
- -  `test/fsw.js` (`JABCfsw`) — JAB-031: arm a temp dir, create a file, drain the name; the name assert is inotify-only (kqueue reports none).
+ -  `test/fsw.js` (`JABCfsw`) — JAB-031: arm a temp dir, create a file, drain the name (the name assert is inotify-only); JAB-032: two dirs on one wfd carry distinct wds, 16k creates raise the OVERFLOW marker, and the `fsw.watch` sugar attributes each event to its own dir.
  -  `lsan.supp` — suppresses JSC-internal singleton leaks by library name.

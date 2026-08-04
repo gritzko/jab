@@ -281,46 +281,61 @@ try {
 to stdout. `tty.openpty()` → `{master, slave}` and `tty.setSize(fd, rows, cols)`
 are pty test support (no controlling tty exists under ctest).
 
-##  fsw — directory watcher (JAB-031)
+##  fsw — directory watcher (JAB-031, JAB-032)
 
 Over abc/FSW: inotify on Linux, kqueue on macOS/BSD. `fsw.init()` returns a
 **pollable fd**, so a watcher is just another fd for `pol.watch(wfd, pol.IN,
 …)` — `FSWPoll` is deliberately unbound, `pol.run` owns the blocking. Stateless
-like every leaf: C holds no watch table; the `wfd → dir` map lives in JS.
+like every leaf: C holds no watch table; the `wd → dir` map lives in JS.
 
 ```js
 let wfd = fsw.init();              // watcher fd (inotify_init1 / kqueue)
-fsw.dir(wfd, "/tmp/x");            // arm one dir level (non-recursive)
+let wd = fsw.dir(wfd, "/tmp/x");   // arm one dir level (non-recursive) → its wd
 let b = io.buf(1 << 16);
 let n = fsw.drain(wfd, b);         // non-blocking; → record count (0 = nothing queued)
 fsw.records(b);                    // → [{wd, name}, …] parsed out of the Buf
 fsw.close(wfd);
 ```
 
-`fsw.drain` packs each event into the caller's `Buf` as **u32 `wd`, u32 name
+**One wfd serves a whole tree.** `fsw.dir` returns the watch descriptor and
+every record carries the `wd` of the dir it fell in, so arming N dirs costs N
+kernel watches but still one fd, one `pol` handler and one drain `Buf`.
+Re-arming a dir returns the **same** `wd`.
+
+`fsw.drain` packs each event into the caller's `Buf` as **i32 `wd`, u32 name
 length, name bytes** (both ints little-endian); room is checked per whole
 record, so DATA never holds a torn one, and an overflowing Buf throws (the
 already-read events are lost — size the Buf for your burst).
 
 The name is inotify's **bare basename**, never a path: compose it with the dir
-you armed. On kqueue the name is **empty** — the event carries no filename, so
-treat it as "rescan this dir". The `wd` slot is **always 0 today**: `FSWDir`
-discards inotify's watch descriptor and `FSWDrain` does not report one, so the
-field is reserved (see the fix-up note in `INDEX.md`).
+that `wd` maps to. The name is **empty** on kqueue always (no filename in the
+event → "rescan this dir"), and on Linux when the event is about the watched
+dir itself (deleted, renamed away, watch died).
+
+`wd === fsw.OVERFLOW` (-1) is **not a dir**: the kernel dropped events because
+its queue overflowed (`max_queued_events`, 16384). Every cache over this
+watcher is now suspect — discard all of it, not one dir. A `ninja` build inside
+a watched tree produces this routinely.
 
 ```js
-let w = fsw.watch("/tmp/x", (name, dir) => { /* name === "" → rescan dir */ });
+let wd = fsw.watch("/tmp/x", (name, dir) => { /* name === "" → rescan dir */ });
+fsw.onoverflow(() => { /* events LOST — drop every cache */ });
 pol.run(pol.NEVER);
-fsw.unwatch(w);                    // pol.unwatch + fsw.close
+fsw.unwatch(wd);                   // forget one dir
+fsw.stop();                        // tear the shared watcher down
 ```
 
-`fsw.watch` opens **one watcher fd per dir** (the fd is the dir's identity while
-the `wd` is unavailable), keeps the map and the drain `Buf`, and registers the
-`pol` handler. Watches cannot be removed one by one (`FSWUndir` was deleted
-under ABC-013); on kqueue `fsw.close` leaves the pinned dir fd open, so
-`RLIMIT_NOFILE` is the macOS ceiling. Linux costs one fd per watcher plus a
-kernel watch per dir, capped by `max_user_watches` (8192); a burst deeper than
-`max_queued_events` drops events, so a consumer must tolerate a missed name.
+`fsw.watch` arms every dir on **one lazily-created watcher fd**, keeps the `wd →
+dir` map, the handler table and the drain `Buf`, and registers the single `pol`
+handler. A lost-events fact (kernel overflow, or a `Buf` too small for the
+burst) reaches `fsw.onoverflow` if set, else every watched dir gets a bare
+rescan (`""` name) — it never escapes as a throw. `fsw.unwatch(wd)` forgets a
+dir but cannot remove the kernel watch (`FSWUndir` was deleted under ABC-013),
+so its events keep arriving unclaimed; `fsw.stop()` closes the watcher outright
+and MUST be called before `pol.init()`, which would otherwise wipe the
+registration and silently strand the watcher. On kqueue `fsw.close` leaves the
+pinned dir fd open (it doubles as the `wd`), so `RLIMIT_NOFILE` is the macOS
+ceiling; on Linux the ceiling is `max_user_watches` (8192 stock).
 
 ##  text
 
