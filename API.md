@@ -47,7 +47,7 @@ side. So a `Buf` is a FIFO: fill DATA, drain DATA.
 ```js
 let b = io.buf(65536);          // engine ArrayBuffer, JS-owned        (u8bAllocate)
 let r = io.ram(1 << 30);        // anonymous mmap, lazy, munmap on GC  (u8bMap)
-let m = io.mmap("idx", "r");    // file map RO; DATA = whole file      (FILEMapRO)
+let m = io.mmap("idx", "r");    // file map RO, no fd kept; DATA = whole file (FILEMapOnce)
 let w = io.mmap("db", "rw");    // file map RW; msync to persist       (FILEMapRW)
 let c = io.mmap("new","c",4096);// create + map at size                (FILEMapCreate)
 let k = io.book("log", 1<<30, 4096); // reserve 1GB VA, 4KB live, stable base (FILEBookCreate)
@@ -613,7 +613,7 @@ k.msync();
 | `b.grow` (book)           | `FILEBookExtend`                       |
 | `io.read*`                | `FILEDrain` / `FILEdrainall` / `FILEdrainv` |
 | `io.write*`               | `FILEFeed` / `FILEFeedAll` / `FILEFeedv`    |
-| `io.mmap` `r`/`rw`/`c`    | `FILEMapRO` / `FILEMapRW` / `FILEMapCreate`  |
+| `io.mmap` `r`/`rw`/`c`    | `FILEMapOnce` / `FILEMapRW` / `FILEMapCreate`       |
 | `io.spawn` / `spawnFds`   | `FILESpawn` / `FILESpawnFds`           |
 | `io.reap`                 | `FILEReap` (`{code}` / `{signal}`)     |
 | `io.unlink`               | `FILEUnLink`                           |

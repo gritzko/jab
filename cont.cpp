@@ -445,6 +445,8 @@ static const char* JABC_CONT_JS = R"JS(
     //  ABC-020: detach FIRST (msync would materialize the buffer and defeat
     //  transfer's move) so stale views read empty, then flush+trim+release the
     //  fd+mapping NOW off the moved husk; double close is a harmless no-op.
+    //  ABC-023: a read-only map holds no fd and no slot — close just detaches
+    //  the views here, the pages go back at GC; _munmap finds nothing, no error.
     let husk;
     try { husk = b.transfer(); } catch (e) { return; }
     const view = new Uint8Array(husk);

@@ -544,6 +544,17 @@ static void JABCMapFree(void* bytes, void* ctx) {
     FILEUnMap(buf);
 }
 
+//  ABC-023: a once-map has no fd and no slot; rebuild its 4-pointer record
+//  from (base, length box) and let FILEUnMapOnce do the one munmap.
+static void JABCMapROFree(void* bytes, void* ctx) {
+  size_t* len = (size_t*)ctx;
+  u8* b = (u8*)bytes;
+  u8* rec[4] = { b, b, b, b };
+  if (b) { rec[2] += *len; rec[3] += *len; }
+  FILEUnMapOnce(rec);
+  free(len);
+}
+
 //  The largest region io._mmap will hand out: 2 GiB minus one byte.
 //  NOT the engine's own limit — JSC allocates up to 4 GiB inclusive, but only
 //  2^32-1 of that is addressable (a[2^32-1] reads `undefined`, JS's canonical
@@ -568,6 +579,8 @@ static JABC_FN(JABCioMmap) {
     JSStringRelease(s);
   }
   u8bp buf = NULL;
+  //  ABC-023: "r" maps into the caller's own buffer — no fd, no booked slot.
+  u8* rob[4] = {};
   ok64 o;
   if (strcmp(mode, "c") == 0) {
     double sz = argc > 2 ? JSValueToNumber(ctx, args[2], NULL) : 0;
@@ -576,13 +589,22 @@ static JABC_FN(JABCioMmap) {
   } else if (strcmp(mode, "rw") == 0) {
     o = FILEMapRW(&buf, $path(path));
   } else {
-    o = FILEMapRO(&buf, $path(path));
+    o = FILEMapOnce(rob, $path(path));
   }
-  if (o != OK || buf == NULL) JABC_THROW(strerror(errno));
+  b8 ro = buf == NULL;
+  u8bp map = ro ? rob : buf;
+  //  ABC-023: a once-map of an EMPTY file is the empty record (base NULL,
+  //  length 0) — an OK result, not a failure; only the slotted paths must map.
+  if (o != OK || (!ro && map[0] == NULL)) JABC_THROW(strerror(errno));
   //  Expose the WHOLE mapping (DATA + IDLE): a created file has DATA empty and
   //  everything in IDLE, a mapped existing file has it all in DATA — either
   //  way the container owns the full region.
-  size_t mlen = u8bDataLen(buf) + u8bIdleLen(buf);
+  size_t mlen = u8bDataLen(map) + u8bIdleLen(map);
+  //  ABC-023: nothing is mapped for an empty file, and a NULL base SEGVs the
+  //  NoCopy constructor — hand back a plain empty array, no finalizer needed.
+  if (ro && mlen == 0)
+    return JSObjectMakeTypedArray(ctx, kJSTypedArrayTypeUint8Array, 0,
+                                  exception);
   //  Refuse oversized mappings HERE, before the NoCopy constructor: past the
   //  engine's own 4 GiB it does not report a JS error, it ABORTS the process
   //  (verified: a 2^32+1 sparse file -> SIGABRT, no `*exception` set, so the
@@ -590,16 +612,28 @@ static JABC_FN(JABCioMmap) {
   //  JABC_MAP_MAX: everything above 2^31-1 is either silently truncated by the
   //  [JAB-007] Buf cursors or unaddressable at the last byte.  Plain words.
   if (mlen > JABC_MAP_MAX) {
-    FILEUnMap(buf);
+    ro ? FILEUnMapOnce(map) : FILEUnMap(buf);
     JABC_THROW("io._mmap(): the file is bigger than 2 GiB, "
                "which is the largest region jab can map at once");
   }
-  //  ABC-020: the finalizer gets (gen, fd) identity, not the slot pointer.
+  //  ABC-023: the read-only finalizer carries the length; ABC-020: the slotted
+  //  one gets (gen, fd) identity, not the slot pointer.
+  size_t* rolen = NULL;
+  if (ro) {
+    rolen = (size_t*)malloc(sizeof(size_t));
+    if (!rolen) {
+      FILEUnMapOnce(map);
+      JABC_THROW(strerror(errno));
+    }
+    *rolen = mlen;
+  }
   JSValueRef ta = JSObjectMakeTypedArrayWithBytesNoCopy(
-      ctx, kJSTypedArrayTypeUint8Array, u8bData(buf)[0], mlen,
-      JABCMapFree, JABCMapCtx(FILEBookedFD(buf)), exception);
+      ctx, kJSTypedArrayTypeUint8Array, u8bData(map)[0], mlen,
+      ro ? JABCMapROFree : JABCMapFree,
+      ro ? (void*)rolen : JABCMapCtx(FILEBookedFD(buf)), exception);
   if (*exception || ta == NULL) {
-    FILEUnMap(buf);
+    if (ro) { FILEUnMapOnce(map); free(rolen); }
+    else FILEUnMap(buf);
     return JSValueMakeUndefined(ctx);
   }
   return ta;
@@ -608,6 +642,8 @@ static JABC_FN(JABCioMmap) {
 //  io._munmap(u8) — ABC-020: release NOW (munmap + close(fd) + fd=-1) the
 //  FILE mapping whose base is this view's; a no-op for a non-FILE (ram) or
 //  already-released mapping.  The GC finalizer stays as an idempotent backstop.
+//  ABC-023: a read map has no fd and no slot to find — nothing to release
+//  here, its pages go back at GC (plain munmap), so this stays a silent no-op.
 static JABC_FN(JABCioMunmap) {
   if (argc < 1) JABC_THROW("io._munmap(Uint8Array)");
   u8* tab[4] = {};
