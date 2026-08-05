@@ -11,6 +11,7 @@ Registration/error glue plus the one boundary touch shared by every leaf.
  -  `JABCBytesOf` — a typed array's offset-adjusted backing range as a `u8s` (adds `byteOffset`, fails on a detached buffer).
  -  `JSOfCString` — a small JS string value from a C string (error text / keys).
  -  install hooks — `JABC*Install`/`Uninstall` entry points main calls per module.
+ -  `JSReportExtraMemoryCost` — JAB-033: the ONE JSC **SPI** jab declares itself (`JSBasePrivate.h` is not installed); io.cpp prices a pinned mapping with it. A webkitgtk that drops the symbol fails the LINK, loudly.
 
 ###  utf8.cpp — UTF-8 text + the bytes helper
 
@@ -31,6 +32,7 @@ Raw syscall leaves over abc `FILE*`; no `File` object and no custody table (the 
  -  `io._read`/`io._write` — one `read`/`write` of a typed array's bytes, return `n` (0 = EOF); cursor advance is the `Buf`'s job.
  -  `io._mmap`/`io._ram`/`io._msync` — file or anon mmap → `Uint8Array` (munmap on GC); flush a mapped view's pages. ABC-023: `"r"` maps keep NO fd (`FILEMapOnce`: closed at map time, no booked slot, an empty file gives an empty view); `"rw"`/`"c"` hold theirs till close.
  -  `io._munmap` — ABC-020: release a FILE mapping NOW by its view's base (munmap + close(fd) + fd=-1); no-op for anon/already-freed/slotless `"r"`; GC stays an idempotent backstop.
+ -  JAB-033: every mapping handed to JS is PRICED for the collector — 64 KiB per VMA, plus a booked fd where there is one, reported at a 4096-map / 256-fd threshold. The collector counts only bytes, and a 4 KiB mapping is too cheap to ever move it.
  -  `io.cwd`/`chdir`/`getenv`/`unlink`/`rename`/`mkdir`/`rmdir` — cwd / set cwd (over chdir(2), throws errno-mapped on ENOENT/ENOTDIR) / env var / remove / atomic rename / mkdir-with-parents / rmdir (`recursive`=rm -rf, over FILERmDir; lets checkout drop a dir on a type-change).
  -  `io.spawn`/`spawnFds`/`reap` — process leaves (JS-020): spawn → `{pid,stdin,stdout}`/pid, reap → `{code}`/`{signal}` (fds/pids are numbers).
  -  `io.log` — write strings / typed arrays to stderr.

@@ -17,6 +17,12 @@ extern "C" {
 #include "JavaScriptCore/JSValueRef.h"
 #include "abc/ABC.hpp"
 
+//  JAB-033: JSC SPI — declared in JSBasePrivate.h, which webkitgtk does not
+//  install; the ONE way to price a pinned mapping (io.cpp).  A drop fails the link.
+extern "C" {
+JS_EXPORT void JSReportExtraMemoryCost(JSContextRef ctx, size_t size);
+}
+
 using namespace abc;
 
 extern thread_local JSGlobalContextRef JABC_CONTEXT;

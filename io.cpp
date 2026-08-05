@@ -527,6 +527,40 @@ static JABC_FN(JABCioWrite) {
   return JSValueMakeNumber(ctx, (double)n);
 }
 
+//  JAB-033: a live map wrapper pins one VMA (65530 per process) plus, when it
+//  is slotted ("rw"/"c"), one booked fd — costs a byte-only collector can't see.
+#define JABC_PIN_MAPS 4096  //  live mappings tolerated before a collection
+#define JABC_PIN_FDS 256    //  live booked fds tolerated before a collection
+//  JAB-033: what ONE VMA is declared to be worth (64 KiB), not what it holds.
+//  Cheapest price whose ceiling IS the floor: 200k maps peak 4307 (12 -> 12516).
+#define JABC_PIN_VMA_BITS 16
+static size_t JABC_PIN_MAP;
+static size_t JABC_PIN_FD;
+static size_t JABC_PIN_MAP_MARK = JABC_PIN_MAPS;
+static size_t JABC_PIN_FD_MARK = JABC_PIN_FDS;
+
+//  JAB-033: one take per wrapper handed to JS, one drop per finalizer — so a
+//  map released early (io._munmap) still counts until its husk is reaped.
+static void JABCPinTake(b8 fd) {
+  ++JABC_PIN_MAP;
+  if (fd) ++JABC_PIN_FD;
+}
+static void JABCPinDrop(b8 fd) {
+  if (JABC_PIN_MAP) --JABC_PIN_MAP;
+  if (fd && JABC_PIN_FD) --JABC_PIN_FD;
+}
+
+//  JAB-033: price the pins BEFORE mapping, so what the collector reaps serves
+//  this very map; the next mark is one floor further up, so it can't run away.
+static void JABCPinSweep(JSContextRef ctx) {
+  if (JABC_PIN_MAP < JABC_PIN_MAP_MARK && JABC_PIN_FD < JABC_PIN_FD_MARK) return;
+  //  JAB-033: a VMA's price, NOT the mapped bytes — the collector counts those
+  //  already and 4 KiB of them is too cheap to ever move it (measured).
+  JSReportExtraMemoryCost(ctx, JABC_PIN_MAP << JABC_PIN_VMA_BITS);
+  JABC_PIN_MAP_MARK = JABC_PIN_MAP + JABC_PIN_MAPS;
+  JABC_PIN_FD_MARK = JABC_PIN_FD + JABC_PIN_FDS;
+}
+
 //  Mapped-file deallocator: JS GC drives the munmap (buf is the FILE_WANT_BUFS
 //  slot handed to FILEUnMap).
 //  ABC-020: per-slot map generation; the finalizer ctx packs gen above the
@@ -536,6 +570,7 @@ static void* JABCMapCtx(int fd) {
   return (void*)((++JABC_MAP_GEN[fd] << FILE_MAX_OPEN_BITS) | (uintptr_t)fd);
 }
 static void JABCMapFree(void* bytes, void* ctx) {
+  JABCPinDrop(YES);
   uintptr_t v = (uintptr_t)ctx;
   int fd = (int)(v & (uintptr_t)(FILE_MAX_OPEN - 1));
   u8bp buf = FILE_WANT_BUFS ? FILE_WANT_BUFS[fd] : NULL;
@@ -547,6 +582,7 @@ static void JABCMapFree(void* bytes, void* ctx) {
 //  ABC-023: a once-map has no fd and no slot; rebuild its 4-pointer record
 //  from (base, length box) and let FILEUnMapOnce do the one munmap.
 static void JABCMapROFree(void* bytes, void* ctx) {
+  JABCPinDrop(NO);
   size_t* len = (size_t*)ctx;
   u8* b = (u8*)bytes;
   u8* rec[4] = { b, b, b, b };
@@ -582,6 +618,8 @@ static JABC_FN(JABCioMmap) {
   //  ABC-023: "r" maps into the caller's own buffer — no fd, no booked slot.
   u8* rob[4] = {};
   ok64 o;
+  //  JAB-033: reap dead mappings first — their VMAs and fds serve this map.
+  JABCPinSweep(ctx);
   if (strcmp(mode, "c") == 0) {
     double sz = argc > 2 ? JSValueToNumber(ctx, args[2], NULL) : 0;
     if (sz < 0) JABC_THROW("io._mmap(): negative size");
@@ -636,6 +674,8 @@ static JABC_FN(JABCioMmap) {
     else FILEUnMap(buf);
     return JSValueMakeUndefined(ctx);
   }
+  //  JAB-033: the wrapper now owns the mapping (and the slot's fd, if any).
+  JABCPinTake(ro ? NO : YES);
   return ta;
 }
 
@@ -654,6 +694,7 @@ static JABC_FN(JABCioMunmap) {
 
 //  Anonymous-mapping deallocator: munmap the whole region, free the length box.
 static void JABCRamFree(void* bytes, void* ctx) {
+  JABCPinDrop(NO);
   size_t* len = (size_t*)ctx;
   munmap(bytes, *len);
   free(len);
@@ -666,6 +707,8 @@ static JABC_FN(JABCioRam) {
   if (*exception) return JSValueMakeUndefined(ctx);
   if (dn <= 0) JABC_THROW("io._ram(): size must be > 0");
   size_t n = (size_t)dn;
+  //  JAB-033: an anon map costs a VMA too — reap the dead ones first.
+  JABCPinSweep(ctx);
   void* map = mmap(NULL, n, PROT_READ | PROT_WRITE,
                    MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
   if (map == MAP_FAILED) JABC_THROW(strerror(errno));
@@ -682,6 +725,7 @@ static JABC_FN(JABCioRam) {
     free(len);
     return JSValueMakeUndefined(ctx);
   }
+  JABCPinTake(NO);  //  JAB-033: the wrapper owns the anon mapping now.
   return ta;
 }
 

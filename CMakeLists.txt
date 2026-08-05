@@ -77,6 +77,9 @@ add_test(NAME JABCheap COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/heap.js)
 add_test(NAME JABChash COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/hash.js)
 add_test(NAME JABCmmap COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmap.js)
 add_test(NAME JABCmmapfd COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmapfd.js)
+# JAB-033: a mapping pins a VMA (and, for "rw", a booked fd) that the byte-only
+# collector cannot see; both counts must plateau over a map-and-drop loop.
+add_test(NAME JABCmmapvma COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/mmapvma.js)
 add_test(NAME JABCstat COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/stat.js)
 add_test(NAME JABCreaddir COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/readdir.js)
 add_test(NAME JABCchdir COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/chdir.js)
