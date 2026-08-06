@@ -51,8 +51,29 @@ In the library layer, there are:
 
 On top of that, all the revision control machinery is being built.
 
+##  Install
+
+On Ubuntu/Debian, install the toolchain and the libraries jab links
+against, then build. Submodules are mandatory.
+
+````sh
+sudo apt install gcc g++ cmake git curl \
+    libz-dev libsodium-dev liblz4-dev \
+    libjavascriptcoregtk-4.1-dev libcurl4-gnutls-dev
+git clone --recurse-submodules https://github.com/gritzko/jab.git
+cd jab && mkdir build && cd build
+cmake .. && make -j8 && make -j8 test
+mkdir -p ~/bin && cp bin/jab ~/bin/
+export PATH=$PATH:~/bin
+````
+
+`jab <name>` resolves a script by scanning up for a `jsrc/` dir, so
+the JS sources are a separate checkout, e.g. [beagle][g] cloned to
+`~/jsrc` makes every verb work anywhere under `$HOME`. Symlinking
+`~/bin/be` to `jab` gives the revision control CLI its usual name.
 
 [7]: http://github.com/gritzko/k7
+[g]: https://github.com/gritzko/beagle
 [n]: https://nodejs.org/en
 [d]: https://deno.com/
 [b]: https://bun.com/

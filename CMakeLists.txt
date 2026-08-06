@@ -7,6 +7,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 set(DOG_BIN_DIR ${CMAKE_BINARY_DIR}/bin)
 include(CTest)
 
+#  curl is a hard dependency of the build: the full `abc` (which jabc_test
+#  links) carries CURL.c.  Checked before descending into dog/abc so a
+#  missing libcurl-dev is named on the first lines of configure output
+#  instead of surfacing as `cannot find -labc` at link time.
+find_package(CURL REQUIRED)
+
 #  JAB-005: abc is NESTED in the dog submodule; dog's guarded
 #  add_subdirectory(abc) provides abc-core, `-Idog` resolves "abc/...".
 set(ABC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dog/abc)
@@ -28,9 +34,19 @@ else()
     )
 endif()
 
+#  JavaScriptCore is mandatory: jab IS the JS runtime, so without it there is
+#  no jab target to build.  The old WARNING + return() ended configure
+#  "successfully" with the `jab` binary silently absent from the build.
+#  Ubuntu/Debian: libjavascriptcoregtk-4.1-dev.  macOS: system framework.
 if(NOT JSC_LIB)
-    message(WARNING "js: JavaScriptCore not found, skipping")
-    return()
+    message(FATAL_ERROR
+        "JavaScriptCore not found — install libjavascriptcoregtk-4.1-dev "
+        "(Debian/Ubuntu) or set JSC_LIB")
+endif()
+if(NOT APPLE AND NOT JSC_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "JavaScriptCore headers (JavaScriptCore/JSBase.h) not found — install "
+        "libjavascriptcoregtk-4.1-dev (Debian/Ubuntu) or set JSC_INCLUDE_DIR")
 endif()
 
 # SODIUM_INCLUDE_DIR is cached by dog/abc's find_path; jab TUs reach sodium
