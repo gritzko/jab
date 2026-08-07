@@ -19,7 +19,10 @@ const n = fsw.drain(wfd, buf);
 if (n < 1) fail("fsw.drain reported no records");
 const rows = fsw.records(buf);
 eq(rows.length, n, "records parsed vs reported");
-if (rows[0].name !== "") {                 // inotify: names are real
+//  Which backend is under us: inotify reports a bare basename per event,
+//  kqueue reports nothing (an empty name IS the "rescan this dir" signal).
+const INOTIFY = rows[0].name !== "";
+if (INOTIFY) {                             // inotify: names are real
   if (!rows.some((r) => r.name === "hello.txt"))
     fail("created name absent: " + JSON.stringify(rows.map((r) => r.name)));
 }
@@ -71,18 +74,24 @@ fsw.close(wfd3);
 // 5) JAB-032: a queue overflow must be REPORTED (wd -1), never swallowed —
 // a silent loss reads as "nothing changed" and poisons any cache.  One drain
 // takes the whole queue, so the Buf is sized for max_queued_events records.
-const dirC = dir + "/c";
-io.mkdir(dirC);
-const wfd4 = fsw.init();
-fsw.dir(wfd4, dirC);
-const QCAP = 16384;                        // fs.inotify.max_queued_events
-for (let i = 0; i < QCAP; i++) io.close(io.open(dirC + "/f" + i, "c"));
-const big = io.buf(1 << 21);
-const n4 = fsw.drain(wfd4, big);
-let over = false;
-fsw.records(big).forEach((r) => { if (r.wd === fsw.OVERFLOW) over = true; });
-if (!over) fail("" + QCAP + " creates drained " + n4 + " records, no overflow marker");
-fsw.close(wfd4);
+// inotify ONLY: kqueue has no per-event queue to overflow — EV_CLEAR coalesces
+// a whole storm into ONE nameless record, which already says "rescan this dir",
+// exactly what an overflow marker says.  There is nothing to lose, so nothing
+// to report.
+if (INOTIFY) {
+  const dirC = dir + "/c";
+  io.mkdir(dirC);
+  const wfd4 = fsw.init();
+  fsw.dir(wfd4, dirC);
+  const QCAP = 16384;                      // fs.inotify.max_queued_events
+  for (let i = 0; i < QCAP; i++) io.close(io.open(dirC + "/f" + i, "c"));
+  const big = io.buf(1 << 21);
+  const n4 = fsw.drain(wfd4, big);
+  let over = false;
+  fsw.records(big).forEach((r) => { if (r.wd === fsw.OVERFLOW) over = true; });
+  if (!over) fail("" + QCAP + " creates drained " + n4 + " records, no overflow marker");
+  fsw.close(wfd4);
+}
 
 // 6) JAB-032: the sugar over ONE shared watcher — two dirs, two handlers,
 // each event attributed to the dir it fell in.  This is the cache's path.

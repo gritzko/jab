@@ -19,8 +19,12 @@ extern "C" {
 
 //  JAB-033: JSC SPI — declared in JSBasePrivate.h, which webkitgtk does not
 //  install; the ONE way to price a pinned mapping (io.cpp).  A drop fails the link.
+//  The second one is the reap that price only ASKS for: JSGarbageCollect is
+//  advisory too (it reports an abandoned graph), and a booked fd is a hard 1024,
+//  so io.cpp forces a collection once the fd mark is crossed.
 extern "C" {
 JS_EXPORT void JSReportExtraMemoryCost(JSContextRef ctx, size_t size);
+JS_EXPORT void JSSynchronousGarbageCollectForDebugging(JSContextRef ctx);
 }
 
 using namespace abc;

@@ -333,10 +333,15 @@ function freshdir(name) {
       return "0".repeat(10 - s.length) + s;
     };
     eq(name10(1000).length, 10, "a padded pup key is 10 RON64 chars");
+    //  RON64 is CASE-SENSITIVE ('A' is 10, 'a' is 37) and macOS/APFS is not,
+    //  so keys 27 apart in one digit name the SAME file there.  Pick keys whose
+    //  two low RON64 digits are both DECIMAL — 10*a + b, a<7, b<10 — so the
+    //  CAP+2 planted names stay distinct on a case-folding filesystem too.
+    const key = (i) => (((i / 10) | 0) << 6) | (i % 10);
     for (let i = 0; i < CAP + 2; i++) {
       const mem = abc.ram("HEAPu64", 1);
       mem.push(BigInt(i));
-      const out = abc.book("HEAPu64", dir + "/" + name10(1000 + i) + ".u64", 1);
+      const out = abc.book("HEAPu64", dir + "/" + name10(key(i)) + ".u64", 1);
       abc.merge([mem], out);
       abc.close(out);
     }

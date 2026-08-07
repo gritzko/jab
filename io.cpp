@@ -557,6 +557,11 @@ static void JABCPinSweep(JSContextRef ctx) {
   //  JAB-033: a VMA's price, NOT the mapped bytes — the collector counts those
   //  already and 4 KiB of them is too cheap to ever move it (measured).
   JSReportExtraMemoryCost(ctx, JABC_PIN_MAP << JABC_PIN_VMA_BITS);
+  //  A price is a HINT: the x86 collector reaps right at the fd mark, the arm64
+  //  one carried on to 739 booked fds.  Bytes can wait for a collector to feel
+  //  like it — an fd cannot, there are 1024 of them and running out is a throw.
+  //  So above the mark the reap is not asked for, it is taken.
+  if (JABC_PIN_FD >= JABC_PIN_FDS) JSSynchronousGarbageCollectForDebugging(ctx);
   JABC_PIN_MAP_MARK = JABC_PIN_MAP + JABC_PIN_MAPS;
   JABC_PIN_FD_MARK = JABC_PIN_FD + JABC_PIN_FDS;
 }
