@@ -67,10 +67,13 @@ mkdir -p ~/bin && cp bin/jab ~/bin/
 export PATH=$PATH:~/bin
 ````
 
-`jab <name>` resolves a script by scanning up for a `jsrc/` dir, so
-the JS sources are a separate checkout, e.g. [beagle][g] cloned to
-`~/jsrc` makes every verb work anywhere under `$HOME`. Symlinking
-`~/bin/be` to `jab` gives the revision control CLI its usual name.
+`jab <name>` resolves a script by scanning up for a `jsrc/` dir.
+A *release* binary needs no such checkout: it carries a default set
+of scripts inside it (JAB-035), unpacked on first use.
+To build such a binary, point the packer at a `jsrc/` dir:
+````sh
+cmake -DJAB_JSRC=/path/to/beagle .. && make -j8
+````
 
 [7]: http://github.com/gritzko/k7
 [g]: https://github.com/gritzko/beagle

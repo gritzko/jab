@@ -195,6 +195,17 @@ Built entirely on the existing bindings (`io.mmap` to read source, `utf8.Decode`
  -  `require.resolve`/`require.cache` — explicit path (`/`,`./`,`../`) resolves `.js`/`/index.js`; a BAREWORD scans UP for `jsrc/` (try `<jsrc>/<name>`,`<name>.js`; ceiling `$HOME/jsrc` else `/jsrc`). By-abspath cache; each module's `require` is bound to its dir.
  -  `__main(spec)` — JAB-001 `jab <bareword>` entry: `resolveJsrc`, patch `process.argv[1]` to the abspath (the `here` idiom), then load it.
  -  JAB-010: a per-process `(baseDir, spec) -> abs` memo runs BEFORE `resolve()`, so a repeat `require()` of a loaded module costs zero syscalls. Successful resolutions only (a miss stays retryable); a relative spec off a relative base is not memoized (stays `io.chdir`-live).
+ -  JAB-035: after the climb, `pinJsrcStack` appends the FLOOR — the jsrc pack embedded in the binary (`jsrcpack`), extracted to `<cache>/jsrcs/<contenthash>/`. It is always LAST, so every real `jsrc/` shadows it per file; unpacking (`zip._inflate` pre-sized by the preamble, then a ustar walk writing through `io.mkdir`/`io.open`) is ~40 lines of the bootstrap JS. No pack → no floor.
+
+###  jsrcpack.cpp / .S / .js — the default jsrc pack (JAB-035)
+
+A prebuilt `jab` carries a default `jsrc/` so the install is "download, run"; `-DJAB_JSRC=<dir>` turns it on, and without the option nothing is embedded and nothing changes.
+
+ -  `jsrcpack.S` — a 3-line `.incbin` of the built pack between `JABC_JSRC_PACK_HEAD`/`_TAIL` (uniform ELF+Mach-O, codesign-safe; no generated `.c`).
+ -  `jsrcpack.cpp` — the whole native side: publishes those bytes as the global `jsrcpack`, a no-copy `Uint8Array` over the binary's own rodata (no deallocator — the bytes are the image). Not linked in → no global → no floor.
+ -  `jsrcpack.js` — the build-time packer, self-hosted: cmake runs the freshly built bootstrap `jab` over it (`jab /abs/jsrcpack.js <dir> <out>`; explicit path, no requires — a build box has no `jsrc/` to climb to). Sorted walk → ustar with zeroed mtime/uid/gid → `zip.deflate` → the 16-byte preamble. Deterministic bytes, so the content hash is stable.
+ -  Pack format: `"JSR"` | version | raw length `u32` LE | `sha256(ustar)[0,8)`, then the ZLIB-wrapped deflate stream (what `zip.inflate` speaks — NOT gzip). The raw length pre-sizes the inflate buffer.
+ -  Two-stage build: `jab_boot` (no pack) packs `<dir>`, then `jab` links the `.S` over it.
 
 ###  main.cpp — context, module install, script runner
 

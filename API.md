@@ -568,6 +568,29 @@ reference after bootstrap.  JAB-001: `jab` takes either an explicit path
 (`/`,`./`,`../` — run directly) or a bareword (resolved via the upward `jsrc/`-scan,
 with `process.argv[1]` patched to the resolved abspath).
 
+##  jsrcpack — the built-in `jsrc/` floor (JAB-035)
+
+```js
+jsrcpack;      // Uint8Array over the pack embedded in the binary — or undefined
+```
+
+A `jab` built with `-DJAB_JSRC=<dir>` carries that tree as a default `jsrc/`:
+`jsrcpack` is a no-copy view of the binary's own rodata (nothing is allocated,
+nothing is freed), and the require bootstrap turns it into a real directory.
+On the first bareword lookup — the once-frozen climb, [GET-041] — the pack is
+extracted to `$XDG_CACHE_HOME` (else `$HOME/.cache`) `/jsrcs/<contenthash>/`
+via a `.tmp-<pid>` dir and an atomic `rename`; a lost race just uses the
+winner's dir. That dir is appended as the LAST stack entry, so it is a FLOOR:
+any real `jsrc/` up the chain shadows it FILE BY FILE, and a `jsrc/` holding a
+single `verbs/foo.js` overrides that one file while every other bareword falls
+through to the pack. The leaf dir is the content hash, never `jsrc`, so the
+climb can never pick it up, and a rebuilt-but-identical tree reuses it.
+
+The pack is a ZLIB-deflated ustar behind a 16-byte preamble (`"JSR"` | version
+| raw length `u32` LE | `sha256(ustar)[0,8)`); `jsrcpack.js` builds it at build
+time with the freshly built `jab` itself. Without the cmake option there is no
+pack, no floor, and `jab` behaves exactly as before.
+
 ##  Examples
 
 ```js

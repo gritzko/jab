@@ -48,6 +48,69 @@ static const char* JABC_REQUIRE_JS = R"JS(
     return spec[0] === "/" || spec.slice(0, 2) === "./" ||
            spec.slice(0, 3) === "../";
   }
+  //  JAB-035: the FLOOR — the jsrc pack embedded in the binary (the global
+  //  `jsrcpack`, absent without -DJAB_JSRC), extracted once and appended LAST.
+  let packErr = null;
+  function packHex(b) {
+    let s = "";
+    for (let i = 8; i < 16; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+    return s;
+  }
+  function packStr(b, off, len) {
+    let end = off;
+    while (end < off + len && b[end] !== 0) end++;
+    return utf8.Decode(b.subarray(off, end));
+  }
+  //  Untar the inflated pack into `dir`: a 512-byte header per entry, then the
+  //  file bytes padded up to the next 512 boundary; a zero header ends it.
+  function packUntar(dir, raw) {
+    let off = 0;
+    while (off + 512 <= raw.length && raw[off] !== 0) {
+      let name = packStr(raw, off, 100);
+      const prefix = packStr(raw, off + 345, 155);
+      if (prefix) name = prefix + "/" + name;
+      const size = parseInt(packStr(raw, off + 124, 12).trim() || "0", 8);
+      const type = raw[off + 156];
+      off += 512;
+      if (type === 48 || type === 0) {          // '0' / NUL: a regular file
+        const p = dir + "/" + name;
+        io.mkdir(dirname(p));
+        const fd = io.open(p, "c");
+        try { io.writeAll(fd, raw.subarray(off, off + size)); }
+        finally { io.close(fd); }
+      }
+      off += (size + 511) & ~511;
+    }
+  }
+  //  Cache probe, then inflate+untar into a temp dir and rename it into place;
+  //  a lost race (the dir is already there) is a win — drop ours, use theirs.
+  function packExtract() {
+    const b = g.jsrcpack;
+    if (!b || b.length < 16 || b[0] !== 74 || b[1] !== 83 || b[2] !== 82)
+      return null;                              // no "JSR" pack: no floor
+    if (b[3] !== 1)
+      throw "the built-in scripts are packed in a format this jab does not know";
+    const home = io.getenv("HOME");
+    const cache = io.getenv("XDG_CACHE_HOME") || (home ? home + "/.cache" : "");
+    if (!cache)
+      throw "neither XDG_CACHE_HOME nor HOME is set, so there is nowhere to " +
+            "unpack the built-in scripts";
+    const dir = cache + "/jsrcs/" + packHex(b);
+    if (isDir(dir)) return dir;
+    const raw = new Uint8Array(b[4] + b[5] * 256 + b[6] * 65536 + b[7] * 16777216);
+    g.zip._inflate(b.subarray(16), raw, 0);     // the preamble pre-sizes it
+    const tmp = cache + "/jsrcs/.tmp-" + io.getpid();
+    io.mkdir(tmp);
+    try {
+      packUntar(tmp, raw);
+      io.rename(tmp, dir);
+    } catch (e) {
+      io.rmdir(tmp, true);
+      if (!isDir(dir)) throw e;
+    }
+    return dir;
+  }
+
   let jsrcStack = null;                        // frozen once, at startup
   function pinJsrcStack(start) {
     const abs = normalize(start[0] === "/" ? start : io.cwd() + "/" + start);
@@ -61,6 +124,9 @@ static const char* JABC_REQUIRE_JS = R"JS(
       if (dir === ceil || dir === "/") break;
       dir = dirname(dir);
     }
+    //  JAB-035: the pack floor joins the one-time pin, BELOW every real jsrc.
+    try { const floor = packExtract(); if (floor) out.push(floor); }
+    catch (e) { packErr = e; }
     jsrcStack = out;
     return out;
   }
@@ -70,7 +136,8 @@ static const char* JABC_REQUIRE_JS = R"JS(
       for (const c of [jsrc + "/" + spec, jsrc + "/" + spec + ".js"])
         if (isFile(c)) return c;
     throw "require: cannot find 'jsrc/" + spec + "' from '" +
-          (from || io.cwd()) + "'";
+          (from || io.cwd()) + "'" + (packErr ?
+          " (jab could not unpack its built-in scripts: " + packErr + ")" : "");
   }
   function resolve(spec, baseDir) {
     if (!isExplicit(spec)) return resolveJsrc(spec, baseDir);

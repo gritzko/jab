@@ -192,6 +192,7 @@ static void JABCInstallModules() {
   JABCPolInstall();   //  poll() event loop over abc/POL (handlers do io.* I/O)
   JABCNetInstall();   //  net/dgram + Node timers over pol (sockets do io.* I/O)
   JABCFswInstall();   //  fsw dir watcher over abc/FSW (JAB-031); rides pol
+  JABCJsrcPackInstall(); //  JAB-035: the embedded jsrc pack, if the build has one
   JABCRequireInstall(); //  sync CommonJS require() over io.mmap/utf8 (last)
 }
 

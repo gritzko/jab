@@ -65,7 +65,7 @@ include_directories(
 # (grouped with CURL); compile them straight into jab for the socket/loop leaves.
 # JAB-031: abc/FSW.c is in no abc library either (it had zero consumers) —
 # same treatment as POL.c: compiled straight into jab for the fsw leaves.
-set(JABC_SRC main.cpp arg.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp
+set(JABC_SRC main.cpp arg.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.cpp uri.cpp codec.cpp zip.cpp ansi.cpp tty.cpp require.cpp jsrcpack.cpp
     pol.cpp ${ABC_DIR}/POL.c net.cpp ${ABC_DIR}/NET.c ${ABC_DIR}/TCP.c ${ABC_DIR}/UDP.c
     fsw.cpp ${ABC_DIR}/FSW.c)
 
@@ -74,6 +74,36 @@ set(JABC_SRC main.cpp arg.cpp io.cpp utf8.cpp buf.cpp console.cpp cont.cpp tok.c
 add_executable(jab ${JABC_SRC})
 target_link_libraries(jab ${JSC_LIB} dog abc-core ${sodium})
 set_target_properties(jab PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${DOG_BIN_DIR})
+
+# JAB-035: -DJAB_JSRC=<dir> embeds that tree as the DEFAULT jsrc pack — the
+# floor of the jsrc stack, so a release binary runs verbs with no checkout.
+# Two-stage, because the packer is jab itself: a bootstrap `jab_boot` (no pack)
+# runs jsrcpack.js over <dir>, and jsrcpack.S .incbin's the result into `jab`.
+# Without the option nothing here happens: no .S, no symbol, no floor.
+if(JAB_JSRC)
+    enable_language(ASM)
+    get_filename_component(JAB_JSRC_DIR "${JAB_JSRC}" ABSOLUTE)
+    if(NOT IS_DIRECTORY ${JAB_JSRC_DIR})
+        message(FATAL_ERROR "JAB_JSRC is not a directory: ${JAB_JSRC_DIR}")
+    endif()
+    set(JAB_PACK ${CMAKE_CURRENT_BINARY_DIR}/jsrc.pack)
+    add_executable(jab_boot ${JABC_SRC})
+    target_link_libraries(jab_boot ${JSC_LIB} dog abc-core ${sodium})
+    file(GLOB_RECURSE JAB_JSRC_FILES CONFIGURE_DEPENDS ${JAB_JSRC_DIR}/*)
+    #  The packer runs as an EXPLICIT path and requires nothing: a build box
+    #  has no jsrc/ to climb to.
+    add_custom_command(OUTPUT ${JAB_PACK}
+        COMMAND jab_boot ${CMAKE_CURRENT_SOURCE_DIR}/jsrcpack.js
+                ${JAB_JSRC_DIR} ${JAB_PACK}
+        DEPENDS jab_boot ${CMAKE_CURRENT_SOURCE_DIR}/jsrcpack.js ${JAB_JSRC_FILES}
+        COMMENT "JAB-035: packing ${JAB_JSRC_DIR}")
+    add_custom_target(jab_jsrc_pack DEPENDS ${JAB_PACK})
+    target_sources(jab PRIVATE jsrcpack.S)
+    add_dependencies(jab jab_jsrc_pack)
+    set_source_files_properties(jsrcpack.S PROPERTIES OBJECT_DEPENDS ${JAB_PACK})
+    target_compile_definitions(jab PRIVATE
+        JABC_JSRC_PACK JABC_JSRC_PACK_FILE="${JAB_PACK}")
+endif()
 
 # Table-driven C++ harness over the buf/utf8/io boundary; returns non-zero on
 # any failed row, so CTest fails on a real bug (CLAUDE.md §3).
@@ -151,6 +181,23 @@ add_test(NAME JABCargv
 add_test(NAME JABCrequireJsrc
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-055.sh $<TARGET_FILE:jab>)
 
+# JAB-035: the pack FORMAT (preamble + a deterministic ustar) over the very
+# packer cmake runs at build time — every build, packed or not.
+add_test(NAME JABCjsrcPack COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/jsrcpack.js)
+
+# JAB-035: the floor end-to-end, in a scratch HOME (no jsrc anywhere, and the
+# real ~/.cache untouched).  A packed build must resolve a bareword out of
+# <cache>/jsrcs/<hash>/ and let a user jsrc/ override it file by file; an
+# unpacked build must still die with "cannot find jsrc/main.js".
+if(JAB_JSRC)
+    add_test(NAME JABCjsrcFloor
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-035.sh $<TARGET_FILE:jab>)
+else()
+    add_test(NAME JABCjsrcNoFloor
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/run-035.sh $<TARGET_FILE:jab>
+                --nofloor)
+endif()
+
 # JS-054: error-exit paths must run the same teardown as success, so a failed
 # script-file open frees the JS context.  Deliberately NOT in the suppression
 # group below — the broad JSC suppression would mask the leak; the script runs
@@ -167,5 +214,5 @@ add_test(NAME JABCleakLoop
 
 # JavaScriptCore leaks lazily-initialised global singletons that LSan flags
 # but are not our leaks; suppress JSC-internal allocations by library name.
-set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCreaddir JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc PROPERTIES
+set_tests_properties(JABCtestCpp JABCe2e JABCheap JABChash JABCmmap JABCstat JABCreaddir JABCsha JABChit JABCindex JABChunk JABCtok JABCuri JABCcodec JABCrequire JABCpack JABCpackidx JABCrepack JABCgit JABCulog JABCulogBook JABCweave JABCbass JABCansi JABCconsole JABCtty JABCpol JABCfsw JABCnet JABCargv JABCrequireJsrc JABCjsrcPack PROPERTIES
     ENVIRONMENT "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
