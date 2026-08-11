@@ -145,6 +145,8 @@ add_test(NAME JABCgit COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/git.js)
 add_test(NAME JABCulog COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ulog.js)
 # ULOG-002/001: native ULOGOpen/AppendAt/Close bindings (booked log + sidecar).
 add_test(NAME JABCulogBook COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/ulog_book.js)
+# STATUS-020: the per-FILE dog._igno_open/_match/_close leaves (one set).
+add_test(NAME JABCigno COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/igno.js)
 add_test(NAME JABCweave COMMAND jab ${CMAKE_CURRENT_SOURCE_DIR}/test/weave.js)
 # JAB-008: binding-boundary BASS rewind — a 256KB fold x1500 in one process
 # (pre-fix the un-rewound arena drained at ~iter 960: "out full?").

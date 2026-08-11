@@ -9,6 +9,7 @@
 #include "pack.hpp"
 #include "ulog.hpp"
 #include "cfold.hpp"
+#include "igno.hpp"
 
 //  The container framework: per-(family,lane) prototypes whose verbs are bound
 //  once to the native _heap_*/_hash_* leaves, plus the all-mmap constructors
@@ -700,6 +701,10 @@ ok64 JABCContInstall() {
   JABCPackInstall(abc);
   JABCUlogInstall(abc);
   JABCCfoldInstall(abc);
+  //  JAB-038: `dog` is the namespace for leaves over dog/ C libraries;
+  //  STATUS-020's igno leaves land here from day one, never on `abc`.
+  JABC_API_OBJECT(dog);
+  JABCIgnoInstall(dog);
   JABCExecute(JABC_CONT_JS);
   return OK;
 }
